@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FolderOpen, Save, Trash2, X } from 'lucide-react';
 import { BoxConfig, SavedBoxProject } from '../types';
 import { TactileButton, TactileInputWell } from './tactile/TactileUI';
+import { authFetch } from '../utils/apiSession';
 
 interface ProjectsModalProps {
   open: boolean;
@@ -26,7 +27,7 @@ export default function ProjectsModal({
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/projects', { credentials: 'include' });
+      const res = await authFetch('/api/projects');
       const data = await res.json();
       if (!res.ok) {
         setErrorMsg(data.error || 'Gagal memuat proyek.');
@@ -58,10 +59,9 @@ export default function ProjectsModal({
     setSaving(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/projects', {
+      const res = await authFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ name: projectName.trim(), config: currentConfig }),
       });
       const data = await res.json();
@@ -81,9 +81,8 @@ export default function ProjectsModal({
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`/api/projects/${id}`, {
+      await authFetch(`/api/projects/${id}`, {
         method: 'DELETE',
-        credentials: 'include',
       });
       setProjects((prev) => prev.filter((p) => p.id !== id));
     } catch {

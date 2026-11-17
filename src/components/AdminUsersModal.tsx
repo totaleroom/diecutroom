@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { AdminUserRecord, AuthUser, UserStatus } from '../types';
 import { TactileButton, TactileInputWell, TactileSegmented } from './tactile/TactileUI';
+import { authFetch } from '../utils/apiSession';
 
 interface AdminUsersModalProps {
   open: boolean;
@@ -44,7 +45,9 @@ export default function AdminUsersModal({
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/admin/users', { credentials: 'include' });
+      const res = await authFetch('/api/admin/users', {
+        headers: { 'Cache-Control': 'no-cache' },
+      });
       const data = await res.json();
       if (!res.ok) {
         setErrorMsg(data.error || 'Gagal memuat daftar pengguna.');
@@ -60,10 +63,12 @@ export default function AdminUsersModal({
 
   useEffect(() => {
     if (open) {
-      loadUsers();
+      setFilterStatus('all');
+      setQuery('');
       setNoticeMsg(null);
       setResetTargetId(null);
       setConfirmDeleteId(null);
+      loadUsers();
     }
   }, [open]);
 
@@ -85,11 +90,11 @@ export default function AdminUsersModal({
       if (filterStatus !== 'all' && u.status !== filterStatus) return false;
       if (!q) return true;
       return (
-        u.name.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q) ||
-        u.company.toLowerCase().includes(q) ||
-        u.accessOrigin.toLowerCase().includes(q) ||
-        u.deviceSummary.toLowerCase().includes(q)
+        (u.name || '').toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q) ||
+        (u.company || '').toLowerCase().includes(q) ||
+        (u.accessOrigin || '').toLowerCase().includes(q) ||
+        (u.deviceSummary || '').toLowerCase().includes(q)
       );
     });
   }, [users, filterStatus, query]);
@@ -99,10 +104,9 @@ export default function AdminUsersModal({
     setErrorMsg(null);
     setNoticeMsg(null);
     try {
-      const res = await fetch(`/api/admin/users/${user.id}/status`, {
+      const res = await authFetch(`/api/admin/users/${user.id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ status: nextStatus }),
       });
       const data = await res.json();
@@ -134,10 +138,9 @@ export default function AdminUsersModal({
     setErrorMsg(null);
     setNoticeMsg(null);
     try {
-      const res = await fetch(`/api/admin/users/${user.id}/password`, {
+      const res = await authFetch(`/api/admin/users/${user.id}/password`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ password: newPassword }),
       });
       const data = await res.json();
@@ -162,9 +165,8 @@ export default function AdminUsersModal({
     setErrorMsg(null);
     setNoticeMsg(null);
     try {
-      const res = await fetch(`/api/admin/users/${user.id}`, {
+      const res = await authFetch(`/api/admin/users/${user.id}`, {
         method: 'DELETE',
-        credentials: 'include',
       });
       const data = await res.json();
       if (!res.ok) {
@@ -201,7 +203,7 @@ export default function AdminUsersModal({
         role="dialog"
         aria-modal="true"
         aria-label="Manajemen Akun Pengguna"
-        className="surface-raised w-full max-w-[980px] max-h-[88vh] bg-[var(--surface-top)] rounded-[var(--radius-feature)] shadow-[var(--shadow-modal)] flex flex-col overflow-hidden"
+        className="surface-raised w-full max-w-[980px] max-h-[90dvh] bg-[var(--surface-top)] rounded-[var(--radius-feature)] shadow-[var(--shadow-modal)] flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="px-6 py-4 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-4 shrink-0">
@@ -252,12 +254,29 @@ export default function AdminUsersModal({
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ink-9)] pointer-events-none"
             />
             <TactileInputWell
-              type="text"
+              type="search"
+              name="admin-user-filter"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              data-lpignore="true"
+              data-form-type="other"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Cari nama, email, subdomain..."
-              className="pl-8"
+              className={`pl-8 ${query ? 'pr-7' : ''}`}
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Hapus pencarian"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ink-9)] hover:text-[var(--ink-12)] p-0.5 cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -278,14 +297,27 @@ export default function AdminUsersModal({
         )}
 
         {/* User List */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 divide-y-[0.5px] divide-[var(--line)]">
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 divide-y-[0.5px] divide-[var(--line)]">
           {loading && users.length === 0 ? (
             <div className="py-12 text-center text-[13px] text-[var(--ink-10)]">
               Memuat daftar pengguna dari SQLite...
             </div>
           ) : filteredUsers.length === 0 ? (
-            <div className="py-12 text-center text-[13px] text-[var(--ink-10)]">
-              Tidak ada pengguna yang cocok dengan filter saat ini.
+            <div className="py-12 text-center text-[13px] text-[var(--ink-10)] space-y-2.5">
+              <div>Tidak ada pengguna yang cocok dengan filter saat ini.</div>
+              {(filterStatus !== 'all' || query.trim() !== '') && users.length > 0 && (
+                <TactileButton
+                  type="button"
+                  variant="secondary"
+                  size="compact"
+                  onClick={() => {
+                    setFilterStatus('all');
+                    setQuery('');
+                  }}
+                >
+                  <span>Tampilkan semua ({users.length})</span>
+                </TactileButton>
+              )}
             </div>
           ) : (
             filteredUsers.map((u) => {

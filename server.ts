@@ -228,7 +228,14 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
 
 function isHttpsRequest(req: Request): boolean {
   const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
-  return req.secure || proto.includes('https');
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  return (
+    req.secure ||
+    proto.includes('https') ||
+    origin.startsWith('https://') ||
+    referer.startsWith('https://')
+  );
 }
 
 function setSessionCookie(req: Request, res: Response, token: string) {
@@ -238,7 +245,7 @@ function setSessionCookie(req: Request, res: Response, token: string) {
     'Path=/',
     'HttpOnly',
     `Max-Age=${SESSION_MAX_AGE_SEC}`,
-    https ? 'SameSite=None; Secure' : 'SameSite=Lax',
+    https ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax',
   ];
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
@@ -250,9 +257,19 @@ function clearSessionCookie(req: Request, res: Response) {
     'Path=/',
     'HttpOnly',
     'Max-Age=0',
-    https ? 'SameSite=None; Secure' : 'SameSite=Lax',
+    https ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax',
   ];
   res.setHeader('Set-Cookie', attrs.join('; '));
+}
+
+function extractSessionToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+    const bearer = authHeader.slice(7).trim();
+    if (bearer) return bearer;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies[COOKIE_NAME] || null;
 }
 
 function clipStr(val: unknown, max = 260): string {
@@ -272,8 +289,7 @@ interface AuthedRequest extends Request {
 }
 
 function requireActiveUser(req: AuthedRequest, res: Response, next: NextFunction) {
-  const cookies = parseCookies(req.headers.cookie);
-  const token = cookies[COOKIE_NAME];
+  const token = extractSessionToken(req);
   if (!token) {
     res.status(401).json({ error: 'Authentication required' });
     return;
@@ -324,8 +340,17 @@ async function startServer() {
   if (process.env.TRUST_PROXY !== 'false') {
     app.set('trust proxy', 1);
   }
+  app.set('etag', false);
 
   app.use(express.json({ limit: '2mb' }));
+
+  // Prevent browser, reverse proxy, or Service Worker caching on dynamic auth/admin/user APIs
+  app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
 
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({ ok: true, db: 'sqlite', timestamp: new Date().toISOString() });
@@ -370,8 +395,7 @@ async function startServer() {
 
   // Check active session
   app.get('/api/auth/me', (req: Request, res: Response) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const token = cookies[COOKIE_NAME];
+    const token = extractSessionToken(req);
     if (!token) {
       res.status(401).json({ user: null });
       return;
@@ -556,7 +580,7 @@ async function startServer() {
     const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) as unknown as UserRow;
     const token = signSessionToken(user.id);
     setSessionCookie(req, res, token);
-    res.json({ user: sanitizeUser(updated) });
+    res.json({ user: sanitizeUser(updated), token });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {

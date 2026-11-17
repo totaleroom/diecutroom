@@ -6,6 +6,7 @@ import InteractiveMatrixCanvas from './InteractiveMatrixCanvas';
 import { HalftonePerimeterFrame, TopRightSheetHalftone } from './HalftoneSheetDecor';
 import WhatsAppContactButton from './WhatsAppContactButton';
 import { TactileButton, TactileInputWell, TactileSegmented } from './tactile/TactileUI';
+import { setClientSessionToken } from '../utils/apiSession';
 
 interface AuthGateProps {
   initialStatusNotice?: {
@@ -90,6 +91,9 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
       }
 
       if (data.user) {
+        if (data.token) {
+          setClientSessionToken(data.token);
+        }
         onAuthenticated(data.user);
       }
     } catch {

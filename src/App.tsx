@@ -29,6 +29,7 @@ import { generateRSCDieline } from './utils/dieline';
 import { computeEngineeringAnalysis } from './utils/engineering';
 import { scheduleIdleWork } from './utils/browserEngine';
 import { formatValue } from './utils/units';
+import { authFetch, clearClientSessionToken } from './utils/apiSession';
 
 const Box3DViewer = lazy(() => import('./components/Box3DViewer'));
 const PalletizerWorkspace = lazy(() => import('./components/PalletizerWorkspace'));
@@ -185,7 +186,9 @@ export default function App() {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 8000);
 
-    fetch('/api/auth/me', { credentials: 'include', signal: controller.signal })
+    authFetch('/api/auth/me', {
+      signal: controller.signal,
+    })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!active) return;
@@ -196,6 +199,7 @@ export default function App() {
           res.status === 403 &&
           (data.code === 'ACCOUNT_PENDING' || data.code === 'ACCOUNT_DISABLED')
         ) {
+          clearClientSessionToken();
           setAuthUser(null);
           setStatusNotice({
             code: data.code,
@@ -203,6 +207,7 @@ export default function App() {
             name: data.user?.name,
           });
         } else {
+          clearClientSessionToken();
           setAuthUser(null);
         }
       })
@@ -250,7 +255,8 @@ export default function App() {
 
   const handleLogout = async () => {
     setMoreMenuOpen(false);
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+    await authFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    clearClientSessionToken();
     setAuthUser(null);
     setStatusNotice(null);
     setAdminModalOpen(false);

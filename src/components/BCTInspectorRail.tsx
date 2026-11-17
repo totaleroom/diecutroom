@@ -27,6 +27,7 @@ import {
   SAFETY_FACTOR_PRESETS,
 } from '../types';
 import { fromMm, toMm } from '../utils/units';
+import { authFetch } from '../utils/apiSession';
 import {
   computeWeightedPrintCoverage,
   detectPrintPresetId,
@@ -85,7 +86,7 @@ export default function BCTInspectorRail({
     setHistory(loadBctHistory(userId));
     if (!userId) return;
 
-    fetch('/api/history', { credentials: 'include' })
+    authFetch('/api/history')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!cancelled && data && Array.isArray(data.entries)) {
@@ -394,10 +395,9 @@ export default function BCTInspectorRail({
     setHistory(next);
     saveBctHistory(next, userId);
     if (userId) {
-      fetch('/api/history', {
+      authFetch('/api/history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ entry }),
       }).catch(() => {});
     }
@@ -410,9 +410,8 @@ export default function BCTInspectorRail({
     setHistory(next);
     saveBctHistory(next, userId);
     if (userId) {
-      fetch(`/api/history/${id}`, {
+      authFetch(`/api/history/${id}`, {
         method: 'DELETE',
-        credentials: 'include',
       }).catch(() => {});
     }
     setCompareIds((prev) => [
