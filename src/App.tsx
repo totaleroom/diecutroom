@@ -83,13 +83,13 @@ export default function App() {
 
   const [layers, setLayers] = useState<LayerVisibility>({
     dimensions: true,
-    productOverlay: true,
+    productOverlay: false,
     barcode: true,
     titleBlock: true,
     grid: true,
-    printBleed: true,
+    printBleed: false,
     scoreSafeZone: true,
-    glueKnockout: true,
+    glueKnockout: false,
     fluteDirection: true,
   });
 
@@ -112,7 +112,7 @@ export default function App() {
       depth: 100,
     },
     boardGrade: 'single-wall',
-    fluteThickness: FLUTE_SPECS.B.thickness,
+    fluteThickness: FLUTE_SPECS.C.thickness,
     glueFlapWidth: 35,
     unit: 'mm',
     materialColor: 'kraft',
@@ -131,16 +131,16 @@ export default function App() {
     },
     engineering: {
       calculationMethod: 'tappi',
-      fluteId: 'B',
-      topLayer: 'K200',
-      mediumLayer: 'M150',
+      fluteId: 'C',
+      topLayer: 'K150',
+      mediumLayer: 'M125',
       centerLayer: 'M125',
       mediumLayer2: 'M150',
-      bottomLayer: 'K200',
+      bottomLayer: 'K150',
       customRct: { enabled: false },
       useActualEct: false,
       actualEctKgfCm: null,
-      ectValue: 39,
+      ectValue: FLUTE_SPECS.C.defaultEct,
       printCoverage: 15,
       panelPrintCoverage: [15, 15, 15, 15],
       printPresetId: 'custom',
@@ -152,7 +152,7 @@ export default function App() {
     },
     barcode: {
       enabled: true,
-      panel: 1,
+      panel: 2,
       value: '18886015206106',
     },
     perforation: {
@@ -169,7 +169,7 @@ export default function App() {
       userName: 'Technical Team',
       date: new Date().toISOString().split('T')[0],
       productName: 'Standard Shipping Box',
-      materialSubstance: 'K200/M150/K200',
+      materialSubstance: 'K150/M125/K150',
       approvalSignee: 'QA Manager',
       printColorsCount: 1,
       printColorCodes: 'Black (Pantone Black C)',
@@ -445,13 +445,16 @@ export default function App() {
               size="compact"
               className="hidden md:inline-flex"
               onClick={() => setEngineeringSheetOpen(true)}
+              title={
+                totalAlerts > 0
+                  ? `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf · ${totalAlerts} peringatan pre-flight`
+                  : `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf`
+              }
             >
               <span className={`size-[7px] rounded-full ${statusDotClass}`} />
               <ShieldCheck size={14} className="text-[var(--ink-10)]" />
-              <span>
-                {totalAlerts > 0
-                  ? `Pre-flight (${totalAlerts})`
-                  : `Stack ${analysis.maxStackingLoadKgf.toFixed(0)} kgf`}
+              <span className="font-mono tabular-nums whitespace-nowrap">
+                {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
               </span>
             </TactileButton>
 
@@ -548,10 +551,8 @@ export default function App() {
                   >
                     <span className="flex items-center gap-2">
                       <ShieldCheck size={14} className="text-[var(--ink-10)]" />
-                      <span>
-                        {totalAlerts > 0
-                          ? `Pre-flight (${totalAlerts})`
-                          : `Stack ${analysis.maxStackingLoadKgf.toFixed(0)} kgf`}
+                      <span className="font-mono tabular-nums">
+                        {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
                       </span>
                     </span>
                     <span className={`size-[7px] rounded-full ${statusDotClass}`} />

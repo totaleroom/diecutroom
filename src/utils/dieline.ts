@@ -553,13 +553,15 @@ export function generateRSCDieline(config: BoxConfig): DielinePaths {
     isVertical: true,
   });
 
-  // 6. Barcode Placement
+  // 6. GS1 ITF-14 Barcode Placement & Magnification (50%-100% nominal GS1 spec)
   let barcodeBox;
   if (barcode.enabled) {
-    const bcW = 152.4;
-    const bcH = 41.4;
-    const marginBottom = 28;
-    const marginRight = 18;
+    // 100% GS1 ITF-14 nominal dimensions (mm):
+    // X = 1.016 mm, 10X quiet zone left/right, 4.8 mm full 4-sided bearer bar, 31.75 mm bar height
+    const GS1_FRAME_W_100 = 152.4;
+    const GS1_FRAME_H_100 = 41.4;
+    const GS1_HRI_H_100 = 7.0;
+    const GS1_TOTAL_H_100 = GS1_FRAME_H_100 + GS1_HRI_H_100;
 
     let panelLeft = pL1_x1;
     let panelRight = pL1_x2;
@@ -568,22 +570,43 @@ export function generateRSCDieline(config: BoxConfig): DielinePaths {
     if (barcode.panel === 4) { panelLeft = pW2_x1; panelRight = pW2_x2; }
 
     const panelW = panelRight - panelLeft;
-    const availableW = Math.max(20, panelW - marginRight * 2);
-    const scaleW = availableW < bcW ? availableW / bcW : 1;
-    const availableH = Math.max(16, dPanel - marginBottom * 1.4);
-    const scaleH = availableH < bcH ? availableH / bcH : 1;
-    const scale = Math.max(0.15, Math.min(scaleW, scaleH));
+    const marginX = Math.min(18, Math.max(5, panelW * 0.08));
+    const marginY = Math.min(20, Math.max(5, dPanel * 0.09));
 
-    const finalW = bcW * scale;
-    const finalH = bcH * scale;
-    const bcX = panelRight - marginRight * scale - finalW;
-    const bcY = y2 - marginBottom * scale - finalH;
+    const availableW = Math.max(16, panelW - marginX * 2);
+    const availableH = Math.max(12, dPanel - marginY * 2);
+
+    const maxMagW = availableW / GS1_FRAME_W_100;
+    const maxMagH = availableH / GS1_TOTAL_H_100;
+    const rawFitMag = Math.min(maxMagW, maxMagH);
+
+    // Clamp physical magnification within GS1 50%-100% when space permits;
+    // allow shrinking below 50% only to prevent crossing crease lines on tiny panels (flagged via gs1Compliant).
+    const scale = Math.max(0.2, Math.min(rawFitMag, 1.0));
+    const gs1Compliant = rawFitMag >= 0.499;
+
+    const frameWidth = r(GS1_FRAME_W_100 * scale);
+    const frameHeight = r(GS1_FRAME_H_100 * scale);
+    const hriHeight = r(GS1_HRI_H_100 * scale);
+    const finalW = frameWidth;
+    const finalH = r(frameHeight + hriHeight);
+
+    const bcX = panelRight - marginX - finalW;
+    const bcY = y2 - marginY - finalH;
 
     barcodeBox = {
       x: r(bcX),
       y: r(bcY),
-      width: r(finalW),
-      height: r(finalH),
+      width: finalW,
+      height: finalH,
+      frameWidth,
+      frameHeight,
+      hriHeight,
+      magnificationPct: Math.round(scale * 1000) / 10,
+      xDimensionMm: r(1.016 * scale),
+      bearerThicknessMm: r(4.8 * scale),
+      quietZoneMm: r(10.16 * scale),
+      gs1Compliant,
       text: barcode.value,
     };
   }

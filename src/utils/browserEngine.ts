@@ -38,7 +38,7 @@ export function getEngineProfile(): EngineQualityProfile {
       shadowsEnabled: true,
       shadowMapSize: 1024,
       maxAnisotropyCap: 4,
-      matrixSpacing: 16,
+      matrixSpacing: 12,
       matrixMaxDpr: 1.5,
     };
     return cachedProfile;
@@ -123,7 +123,7 @@ export function getEngineProfile(): EngineQualityProfile {
       shadowsEnabled: true,
       shadowMapSize: 1024,
       maxAnisotropyCap: 8,
-      matrixSpacing: 16,
+      matrixSpacing: 11,
       matrixMaxDpr: Math.min(nativeDpr, 2.0),
     },
     balanced: {
@@ -132,7 +132,7 @@ export function getEngineProfile(): EngineQualityProfile {
       shadowsEnabled: true,
       shadowMapSize: 1024,
       maxAnisotropyCap: 4,
-      matrixSpacing: 16,
+      matrixSpacing: 12,
       matrixMaxDpr: Math.min(nativeDpr, 1.5),
     },
     eco: {
@@ -141,7 +141,7 @@ export function getEngineProfile(): EngineQualityProfile {
       shadowsEnabled: false,
       shadowMapSize: 512,
       maxAnisotropyCap: 2,
-      matrixSpacing: 20,
+      matrixSpacing: 16,
       matrixMaxDpr: Math.min(nativeDpr, 1.15),
     },
     software: {
@@ -150,7 +150,7 @@ export function getEngineProfile(): EngineQualityProfile {
       shadowsEnabled: false,
       shadowMapSize: 512,
       maxAnisotropyCap: 1,
-      matrixSpacing: 18,
+      matrixSpacing: 16,
       matrixMaxDpr: 1.0,
     },
   };

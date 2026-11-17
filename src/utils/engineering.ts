@@ -859,6 +859,13 @@ export function computeEngineeringAnalysis(
           bcCheck.reason ||
           'Barcode falls back to CODE128 until 14-digit Mod-10 check digit is valid.',
       });
+    } else if (!bc.gs1Compliant) {
+      fieldIssues.push({
+        id: 'barcode-gs1-magnification',
+        severity: 'warning',
+        title: `GS1 ITF-14 magnification ${bc.magnificationPct.toFixed(0)}% below 50% minimum`,
+        detail: `X-dimension ${bc.xDimensionMm.toFixed(2)} mm is narrower than GS1 0.508 mm limit. Place barcode on a wider panel or increase box dimensions.`,
+      });
     } else if (minClearance < 5) {
       fieldIssues.push({
         id: 'barcode-score-proximity',
@@ -871,8 +878,8 @@ export function computeEngineeringAnalysis(
       fieldIssues.push({
         id: 'barcode-valid',
         severity: 'pass',
-        title: `ITF-14 barcode clears score lines by ${minClearance.toFixed(1)} mm`,
-        detail: 'Mod-10 check digit verified with safe quiet zone margin.',
+        title: `GS1 ITF-14 (${bc.magnificationPct.toFixed(0)}% · X=${bc.xDimensionMm.toFixed(2)} mm) clears score lines by ${minClearance.toFixed(1)} mm`,
+        detail: `Mod-10 verified with ${bc.bearerThicknessMm.toFixed(1)} mm full 4-sided bearer bar and ${bc.quietZoneMm.toFixed(1)} mm quiet zones.`,
       });
     }
   }

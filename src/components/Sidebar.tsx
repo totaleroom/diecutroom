@@ -1113,6 +1113,23 @@ export default function Sidebar({
                       ]}
                     />
                   </div>
+
+                  {paths.barcodeBox && (
+                    <div className="pt-2 border-t-[0.5px] border-[var(--line)] space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-[var(--ink-11)]">
+                        <span>{`GS1 ${paths.barcodeBox.magnificationPct.toFixed(0)}%`}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{`X ${paths.barcodeBox.xDimensionMm.toFixed(2)} mm`}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{`Bearer ${paths.barcodeBox.bearerThicknessMm.toFixed(1)} mm`}</span>
+                      </div>
+                      {!paths.barcodeBox.gs1Compliant && (
+                        <p className="text-[11px] leading-[15px] text-[var(--amber-11)]">
+                          Panel lebih kecil dari minimum standar GS1 50% (X &lt; 0.51 mm).
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </section>

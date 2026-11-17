@@ -196,6 +196,7 @@ export interface BoxConfig {
 export const BOX_STYLES: Array<{
   id: BoxStyle;
   code: string;
+  abbrev: string;
   name: string;
   shortName: string;
   description: string;
@@ -203,6 +204,7 @@ export const BOX_STYLES: Array<{
   {
     id: '0201',
     code: 'FEFCO 0201',
+    abbrev: 'RSC',
     name: 'Regular Slotted Container (RSC)',
     shortName: '0201 · RSC',
     description: 'Standard shipping carton with equal top and bottom meeting flaps.',
@@ -210,6 +212,7 @@ export const BOX_STYLES: Array<{
   {
     id: '0200',
     code: 'FEFCO 0200',
+    abbrev: 'HSC',
     name: 'Half Slotted Container (HSC)',
     shortName: '0200 · HSC',
     description: 'Open-top tray or sleeve carton with bottom slotted flaps only.',
@@ -217,6 +220,7 @@ export const BOX_STYLES: Array<{
   {
     id: '0202',
     code: 'FEFCO 0202',
+    abbrev: 'OSC',
     name: 'Overlap Slotted Container (OSC)',
     shortName: '0202 · OSC',
     description: 'Outer flaps overlap by a custom allowance for extra top and bottom seal strength.',
@@ -224,6 +228,7 @@ export const BOX_STYLES: Array<{
   {
     id: '0203',
     code: 'FEFCO 0203',
+    abbrev: 'FOL',
     name: 'Full Overlap Slotted (FOL)',
     shortName: '0203 · FOL',
     description: 'Outer flaps span full box width for maximum stacking and puncture resistance.',
@@ -231,6 +236,7 @@ export const BOX_STYLES: Array<{
   {
     id: '0204',
     code: 'FEFCO 0204',
+    abbrev: 'CSSC',
     name: 'Center Special Slotted (CSSC)',
     shortName: '0204 · CSSC',
     description: 'Both inner (L/2) and outer (W/2) flaps meet flush at center without voids.',
@@ -678,7 +684,21 @@ export interface DielinePaths {
     headspaceMm: number;
   }>;
   dimensionLines: DimensionLine[];
-  barcodeBox?: { x: number; y: number; width: number; height: number; text: string };
+  barcodeBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    frameWidth: number;
+    frameHeight: number;
+    hriHeight: number;
+    magnificationPct: number;
+    xDimensionMm: number;
+    bearerThicknessMm: number;
+    quietZoneMm: number;
+    gs1Compliant: boolean;
+    text: string;
+  };
   width: number;
   height: number;
   panelCoords: {

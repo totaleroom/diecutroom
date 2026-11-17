@@ -87,20 +87,18 @@ export default function BoxPreview({
   const [exportingPdf, setExportingPdf] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
-  // Flatten JsBarcode into pure SVG <g> primitives (no nested <svg> for Illustrator/Corel/PDF safety)
+  // Flatten JsBarcode bars into pure SVG <g> primitives (bearer bars, 10X quiet zones, & HRI rendered cleanly in mm)
   const flattenedBarcode = useMemo<FlattenedBarcode | null>(() => {
     if (!paths.barcodeBox) return null;
     try {
       const tempSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       const opts = {
         width: 2,
-        height: 50,
-        displayValue: true,
-        margin: 10,
+        height: 100,
+        displayValue: false,
+        margin: 0,
         background: '',
         lineColor: '#000000',
-        font: 'Arial, Helvetica, sans-serif',
-        fontSize: 16,
       };
       try {
         JsBarcode(tempSvg, paths.barcodeBox.text, { format: 'ITF14', ...opts });
@@ -108,11 +106,11 @@ export default function BoxPreview({
         JsBarcode(tempSvg, paths.barcodeBox.text, { format: 'CODE128', ...opts });
       }
       const origW = parseFloat(tempSvg.getAttribute('width') || '200');
-      const origH = parseFloat(tempSvg.getAttribute('height') || '80');
+      const origH = parseFloat(tempSvg.getAttribute('height') || '100');
       return {
         markup: tempSvg.innerHTML,
         origW: Number.isFinite(origW) && origW > 0 ? origW : 200,
-        origH: Number.isFinite(origH) && origH > 0 ? origH : 80,
+        origH: Number.isFinite(origH) && origH > 0 ? origH : 100,
       };
     } catch {
       return null;
@@ -883,37 +881,65 @@ export default function BoxPreview({
               })}
             </g>
 
-            {/* Flattened Vector Barcode with Standard Bearer Bars */}
-            {paths.barcodeBox && flattenedBarcode && (
-              <g
-                id="LAYER_BARCODE"
-                data-export-role="barcode"
-                display={layers.barcode ? undefined : 'none'}
-                transform={`translate(${paths.barcodeBox.x}, ${paths.barcodeBox.y})`}
-              >
-                <rect
-                  width={paths.barcodeBox.width}
-                  height={paths.barcodeBox.height}
-                  fill="#FFFFFF"
-                  stroke="none"
-                />
-                <rect
-                  x="0"
-                  y="0"
-                  width={paths.barcodeBox.width}
-                  height={paths.barcodeBox.height}
-                  fill="none"
-                  stroke="#000000"
-                  strokeWidth="4.2"
-                />
+            {/* Flattened Vector GS1 ITF-14 Barcode with Proportional Standard 4-Sided Bearer Bars & 10X Quiet Zones */}
+            {paths.barcodeBox && flattenedBarcode && (() => {
+              const bc = paths.barcodeBox;
+              const b = bc.bearerThicknessMm;
+              const qz = bc.quietZoneMm;
+              const innerX = b + qz;
+              const innerY = b;
+              const innerW = Math.max(4, bc.frameWidth - 2 * (b + qz));
+              const innerH = Math.max(4, bc.frameHeight - 2 * b);
+              const hriFontSize = Math.max(3.2, bc.hriHeight * 0.74);
+              const magScale = bc.magnificationPct / 100;
+              return (
                 <g
-                  transform={`scale(${paths.barcodeBox.width / flattenedBarcode.origW}, ${
-                    paths.barcodeBox.height / flattenedBarcode.origH
-                  })`}
-                  dangerouslySetInnerHTML={{ __html: flattenedBarcode.markup }}
-                />
-              </g>
-            )}
+                  id="LAYER_BARCODE"
+                  data-export-role="barcode"
+                  display={layers.barcode ? undefined : 'none'}
+                  transform={`translate(${bc.x}, ${bc.y})`}
+                >
+                  {/* Clean white substrate + quiet zone background */}
+                  <rect
+                    width={bc.width}
+                    height={bc.height}
+                    fill="#FFFFFF"
+                    stroke="none"
+                  />
+                  {/* Standard 4-sided filled Bearer Bar frame (4.8mm at 100% GS1 mag) */}
+                  <rect x="0" y="0" width={bc.frameWidth} height={b} fill="#000000" />
+                  <rect x="0" y={bc.frameHeight - b} width={bc.frameWidth} height={b} fill="#000000" />
+                  <rect x="0" y={b} width={b} height={Math.max(0, bc.frameHeight - 2 * b)} fill="#000000" />
+                  <rect
+                    x={bc.frameWidth - b}
+                    y={b}
+                    width={b}
+                    height={Math.max(0, bc.frameHeight - 2 * b)}
+                    fill="#000000"
+                  />
+                  {/* ITF-14 symbol bars scaled to exact 1:1 mm X-dimension inside 10X quiet zones */}
+                  <g
+                    transform={`translate(${innerX}, ${innerY}) scale(${innerW / flattenedBarcode.origW}, ${
+                      innerH / flattenedBarcode.origH
+                    })`}
+                    dangerouslySetInnerHTML={{ __html: flattenedBarcode.markup }}
+                  />
+                  {/* Human Readable Interpretation (HRI) cleanly below bottom bearer bar */}
+                  <text
+                    x={bc.frameWidth * 0.5}
+                    y={bc.frameHeight + bc.hriHeight * 0.8}
+                    textAnchor="middle"
+                    fontSize={hriFontSize}
+                    fontFamily="Arial, Helvetica, sans-serif"
+                    fontWeight="bold"
+                    letterSpacing={Math.max(0.2, 0.55 * magScale)}
+                    fill="#000000"
+                  >
+                    {bc.text}
+                  </text>
+                </g>
+              );
+            })()}
 
             {/* Exportable Legend & Technical Title Block (Guaranteed inside viewBox with 20mm margin) */}
             <g
@@ -994,7 +1020,7 @@ export default function BoxPreview({
                 Style:
               </text>
               <text x="234" y="36" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#0F172A" fontWeight="bold">
-                {activeStyleInfo.code}
+                {`${activeStyleInfo.abbrev} (${activeStyleInfo.id})`}
               </text>
 
               <text x="162" y="52" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#64748B">
