@@ -1,0 +1,6 @@
+{
+  "name": "DieCut.Studio",
+  "description": "FEFCO corrugated packaging CAD dieline generator, anti-headspace tolerance calculator, and 3D fit simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

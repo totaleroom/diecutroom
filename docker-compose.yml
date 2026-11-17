@@ -1,0 +1,22 @@
+services:
+  diecut-room:
+    image: diecut-room:${IMAGE_TAG:-1.5.0}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_WHATSAPP_ADMIN: ${VITE_WHATSAPP_ADMIN:-6282125086328}
+    container_name: diecut-room
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "127.0.0.1:${HOST_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SQLITE_PATH=/app/data/diecut.db
+      - NODE_OPTIONS=--max-old-space-size=192
+    volumes:
+      - ./data:/app/data

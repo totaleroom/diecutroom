@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DieCut.Room — Structural Packaging CAD &amp; 3D Fit Simulator</title>
+    <meta name="description" content="FEFCO corrugated packaging CAD dieline generator, anti-headspace tolerance calculator, and 3D fit simulator by Totale.Room." />
+    <meta property="og:title" content="DieCut.Room — Structural Packaging CAD &amp; 3D Fit Simulator" />
+    <meta property="og:description" content="FEFCO corrugated packaging CAD dieline generator, anti-headspace tolerance calculator, and 3D fit simulator by Totale.Room." />
+    <meta name="theme-color" content="#17191f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="DieCut.Room" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preload" as="image" type="image/svg+xml" href="/assets/aistudio/Asset_2_5ca58983.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        window.__DIECUT_MOUNTED__ = false;
+        var recovered = false;
+
+        function clearCachesAndReload(autoAttempt) {
+          var finishReload = function () {
+            try {
+              var u = new URL(window.location.href);
+              u.searchParams.set('_cb', String(Date.now()));
+              window.location.replace(u.toString());
+            } catch (_) {
+              window.location.reload();
+            }
+          };
+
+          var jobs = [];
+          try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
+              jobs.push(
+                navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(regs.map(function (r) { return r.unregister(); }));
+                })
+              );
+            }
+            if ('caches' in window && caches.keys) {
+              jobs.push(
+                caches.keys().then(function (keys) {
+                  return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+                })
+              );
+            }
+          } catch (_) {}
+
+          Promise.all(jobs).then(finishReload, finishReload);
+          if (!autoAttempt) {
+            setTimeout(finishReload, 1200);
+          }
+        }
+
+        function showRecovery(reason) {
+          if (window.__DIECUT_MOUNTED__ || recovered) return;
+          recovered = true;
+
+          try {
+            var k = 'diecut_boot_retry';
+            var last = Number(sessionStorage.getItem(k) || '0');
+            if (Date.now() - last > 15000) {
+              sessionStorage.setItem(k, String(Date.now()));
+              clearCachesAndReload(true);
+              return;
+            }
+          } catch (_) {}
+
+          var mountUI = function () {
+            if (window.__DIECUT_MOUNTED__) return;
+            var root = document.getElementById('root');
+            if (!root || root.children.length > 0) return;
+            root.innerHTML =
+              '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#17191f;">' +
+              '<div style="width:100%;max-width:420px;background:#fcfcfd;border:1px solid #cdd2db;border-radius:2px;padding:24px;box-shadow:0 12px 32px rgba(23,25,31,0.08);">' +
+              '<h1 style="margin:0 0 6px;font-size:16px;font-weight:600;">DieCut.Room — Pemulihan Halaman</h1>' +
+              '<p style="margin:0 0 14px;font-size:13px;line-height:19px;color:#5c626e;">Modul aplikasi gagal dimuat atau cache versi lama masih tersimpan di browser Anda.</p>' +
+              (reason
+                ? '<div style="margin:0 0 14px;padding:8px 10px;background:#eceef1;border:1px solid #dadde4;border-radius:2px;font-size:11.5px;font-family:monospace;color:#474d58;word-break:break-word;">' +
+                  String(reason).replace(/[<>&"]/g, '') +
+                  '</div>'
+                : '') +
+              '<button id="__dc_recover_btn" type="button" style="width:100%;height:36px;border:0;border-radius:2px;background:#17191f;color:#fff;font-size:13px;font-weight:500;cursor:pointer;">Muat Ulang &amp; Bersihkan Cache</button>' +
+              '</div></div>';
+            var btn = document.getElementById('__dc_recover_btn');
+            if (btn) {
+              btn.addEventListener('click', function () { clearCachesAndReload(false); });
+            }
+          };
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', mountUI, { once: true });
+          } else {
+            mountUI();
+          }
+        }
+
+        window.addEventListener(
+          'error',
+          function (ev) {
+            var t = ev && ev.target;
+            if (t && t.tagName === 'SCRIPT' && t.getAttribute('type') === 'module') {
+              showRecovery('Module script failed: ' + (t.getAttribute('src') || 'entry'));
+            }
+          },
+          true
+        );
+
+        setTimeout(function () {
+          if (!window.__DIECUT_MOUNTED__) {
+            showRecovery('Waktu muat modul habis. Kemungkinan cache Service Worker lama aktif.');
+          }
+        }, 6500);
+      })();
+    </script>
+  </head>
+  <body style="background:#f4f5f7;">
+    <div id="root"></div>
+    <noscript>
+      <div style="padding:24px;font-family:sans-serif;color:#17191f;">
+        DieCut.Room memerlukan JavaScript aktif untuk dijalankan.
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

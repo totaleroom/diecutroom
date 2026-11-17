@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="108" fill="#17191F"/>
+  <!-- Outer dieline precision frame -->
+  <rect x="84" y="84" width="344" height="344" rx="28" stroke="#474D58" stroke-width="6" stroke-dasharray="18 14"/>
+  <!-- Isometric corrugated box wireframe -->
+  <path d="M256 122L380 186V326L256 390L132 326V186L256 122Z" fill="#23262F" stroke="#F8FAFC" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M132 186L256 250L380 186" stroke="#F8FAFC" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M256 250V390" stroke="#F8FAFC" stroke-width="14" stroke-linecap="round"/>
+  <!-- Red crease & green SRP perforation accent lines -->
+  <path d="M194 154L318 218" stroke="#E11D48" stroke-width="10" stroke-linecap="round" stroke-dasharray="14 10"/>
+  <path d="M168 258L228 289V335" stroke="#16A34A" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="14 10"/>
+</svg>

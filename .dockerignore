@@ -1,0 +1,16 @@
+node_modules
+dist
+dev-dist
+data
+.git
+.env*
+!.env.example
+*.db*
+.session_secret
+*.log
+.tmp*
+.aistudio
+.agents
+agent
+skills-lock.json
+bun.lock
