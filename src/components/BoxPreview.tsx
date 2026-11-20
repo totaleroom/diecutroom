@@ -12,6 +12,7 @@ import JsBarcode from 'jsbarcode';
 import {
   DielinePaths,
   BoxConfig,
+  EngineeringAnalysis,
   LayerVisibility,
   ExportMode,
   BOX_STYLES,
@@ -26,6 +27,7 @@ import {
 interface BoxPreviewProps {
   paths: DielinePaths;
   config: BoxConfig;
+  analysis?: EngineeringAnalysis;
   layers: LayerVisibility;
   onToggleLayer: (layer: keyof LayerVisibility) => void;
   exportMode: ExportMode;
@@ -69,6 +71,7 @@ function wrapLines(text: string, lineLen: number, maxLines: number): string[] {
 export default function BoxPreview({
   paths,
   config,
+  analysis,
   layers,
   onToggleLayer,
   exportMode,
@@ -121,7 +124,7 @@ export default function BoxPreview({
   const margin = 20;
   const tbGap = 16;
   const titleBlockWidth = 760;
-  const titleBlockHeight = 132;
+  const titleBlockHeight = 144;
 
   const computeViewportMetrics = useCallback(
     (includeDims: boolean, includeTitleBlock: boolean) => {
@@ -150,9 +153,27 @@ export default function BoxPreview({
     [paths]
   );
 
+  const isCleanCad = exportMode === 'clean-cad';
+  const effectiveLayers = useMemo<LayerVisibility>(
+    () =>
+      isCleanCad
+        ? {
+            ...layers,
+            dimensions: false,
+            productOverlay: false,
+            titleBlock: false,
+            printBleed: false,
+            scoreSafeZone: false,
+            glueKnockout: false,
+            fluteDirection: false,
+          }
+        : layers,
+    [isCleanCad, layers]
+  );
+
   const previewMetrics = useMemo(
-    () => computeViewportMetrics(layers.dimensions, layers.titleBlock),
-    [computeViewportMetrics, layers.dimensions, layers.titleBlock]
+    () => computeViewportMetrics(effectiveLayers.dimensions, effectiveLayers.titleBlock),
+    [computeViewportMetrics, effectiveLayers.dimensions, effectiveLayers.titleBlock]
   );
 
   const resetView = useCallback(() => {
@@ -417,6 +438,11 @@ export default function BoxPreview({
                 className="surface-overlay absolute left-0 top-full mt-1.5 w-[240px] bg-[var(--overlay)] rounded-[var(--radius-container)] shadow-[var(--shadow-menu)] p-1.5 z-40 origin-top"
                 style={{ animation: 'tactileMenuIn 150ms cubic-bezier(0.23, 1, 0.32, 1)' }}
               >
+                {isCleanCad && (
+                  <div className="mx-1 mb-1.5 px-2 py-1.5 rounded-[var(--radius-control)] bg-[var(--ink-2)] text-[11px] leading-[15px] text-[var(--ink-11)]">
+                    Mode Clean CAD aktif: kanvas &amp; ekspor hanya menampilkan garis potong, lipat, perforasi &amp; barcode.
+                  </div>
+                )}
                 <div className="px-2 py-1 text-[12px] leading-[16px] text-[var(--ink-10)]">
                   CAD and annotations
                 </div>
@@ -495,8 +521,16 @@ export default function BoxPreview({
             size="compact"
             ariaLabel="Export mode"
             options={[
-              { value: 'spec-sheet', label: 'Spec sheet' },
-              { value: 'clean-cad', label: 'Clean CAD' },
+              {
+                value: 'spec-sheet',
+                label: 'Spec sheet',
+                title: 'Gambar teknik lengkap (dimensi, legenda, title block, pre-press) untuk review/QA',
+              },
+              {
+                value: 'clean-cad',
+                label: 'Clean CAD',
+                title: 'Pratinjau & ekspor vektor murni 1:1 (Cut, Crease, Perforation, Barcode) untuk mesin potong',
+              },
             ]}
           />
 
@@ -536,7 +570,7 @@ export default function BoxPreview({
           isPanning ? 'cursor-grabbing' : 'cursor-grab'
         }`}
         style={
-          layers.grid
+          effectiveLayers.grid
             ? {
                 backgroundImage:
                   'radial-gradient(circle, #CBD5E1 1px, transparent 1px)',
@@ -575,7 +609,7 @@ export default function BoxPreview({
               <g
                 id="LAYER_PREPRESS_BLEED"
                 data-export-role="prepress-bleed"
-                display={layers.printBleed ? undefined : 'none'}
+                display={effectiveLayers.printBleed ? undefined : 'none'}
               >
                 <path
                   d={paths.bleedPath}
@@ -592,7 +626,7 @@ export default function BoxPreview({
               <g
                 id="LAYER_PREPRESS_SAFEZONE"
                 data-export-role="prepress-safezone"
-                display={layers.scoreSafeZone ? undefined : 'none'}
+                display={effectiveLayers.scoreSafeZone ? undefined : 'none'}
               >
                 {paths.safeZoneBoxes.map((box, idx) => (
                   <rect
@@ -616,7 +650,7 @@ export default function BoxPreview({
               <g
                 id="LAYER_PREPRESS_GLUE_KNOCKOUT"
                 data-export-role="prepress-glue-knockout"
-                display={layers.glueKnockout ? undefined : 'none'}
+                display={effectiveLayers.glueKnockout ? undefined : 'none'}
               >
                 <polygon
                   points={paths.glueKnockoutPolygon}
@@ -693,7 +727,7 @@ export default function BoxPreview({
             <g
               id="LAYER_PREPRESS_FLUTE"
               data-export-role="prepress-flute"
-              display={layers.fluteDirection ? undefined : 'none'}
+              display={effectiveLayers.fluteDirection ? undefined : 'none'}
             >
               {flIsV ? (
                 <>
@@ -763,7 +797,7 @@ export default function BoxPreview({
               <g
                 id="LAYER_PRODUCT_FIT"
                 data-export-role="product-overlay"
-                display={layers.productOverlay ? undefined : 'none'}
+                display={effectiveLayers.productOverlay ? undefined : 'none'}
               >
                 {paths.productSimulationBoxes.map((box, idx) => {
                   const hs = box.headspaceMm;
@@ -817,7 +851,7 @@ export default function BoxPreview({
             <g
               id="LAYER_DIMENSIONS"
               data-export-role="dimensions"
-              display={layers.dimensions ? undefined : 'none'}
+              display={effectiveLayers.dimensions ? undefined : 'none'}
               stroke="#3B82F6"
               strokeWidth="0.6"
               fill="none"
@@ -833,7 +867,7 @@ export default function BoxPreview({
                   ? `${dim.x2 - 2},${dim.y2 - 4} ${dim.x2},${dim.y2} ${dim.x2 + 2},${dim.y2 - 4}`
                   : `${dim.x2 - 4},${dim.y2 - 2} ${dim.x2},${dim.y2} ${dim.x2 - 4},${dim.y2 + 2}`;
 
-                const fontSize = config.appearance.dimFontSize || 8;
+                const fontSize = config.appearance.dimFontSize || 12;
                 const textLen = dim.text.length * (fontSize * 0.62);
                 const boxW = isV ? fontSize + 4 : textLen + 8;
                 const boxH = isV ? textLen + 8 : fontSize + 4;
@@ -896,7 +930,7 @@ export default function BoxPreview({
                 <g
                   id="LAYER_BARCODE"
                   data-export-role="barcode"
-                  display={layers.barcode ? undefined : 'none'}
+                  display={effectiveLayers.barcode ? undefined : 'none'}
                   transform={`translate(${bc.x}, ${bc.y})`}
                 >
                   {/* Clean white substrate + quiet zone background */}
@@ -945,7 +979,7 @@ export default function BoxPreview({
             <g
               id="LAYER_TITLE_BLOCK"
               data-export-role="title-block"
-              display={layers.titleBlock ? undefined : 'none'}
+              display={effectiveLayers.titleBlock ? undefined : 'none'}
               transform={`translate(${previewMetrics.tbX}, ${previewMetrics.tbY})`}
             >
               <rect
@@ -1000,12 +1034,21 @@ export default function BoxPreview({
               </text>
 
               <text x="14" y="96" fontSize="7.5" fontFamily="Arial, Helvetica, sans-serif" fill="#64748B">
-                Scale: 1:1 (1 unit = 1 mm)
+                {unitLabel === 'mm'
+                  ? 'Scale: 1:1 (1 unit = 1 mm)'
+                  : `Scale: 1:1 mm (View: ${unitLabel.toUpperCase()})`}
               </text>
               <text x="14" y="108" fontSize="7.5" fontFamily="Arial, Helvetica, sans-serif" fill="#64748B">
                 {`Flute: ${config.prepress.fluteDirection.toUpperCase()} (${unitLabel.toUpperCase()})`}
               </text>
-              <text x="14" y="121" fontSize="8" fontFamily="Timeless Grotesk, Plus Jakarta Sans, Arial, sans-serif" fontWeight="bold" fill="#0F172A">
+              <text x="14" y="120" fontSize="7.5" fontFamily="Arial, Helvetica, sans-serif" fill={config.advanced.compensateInnerFlapDepth ? '#0F172A' : '#64748B'}>
+                {`Depth Allow: ${
+                  config.advanced.compensateInnerFlapDepth
+                    ? `+${fmt(paths.info.depthAllowanceMm)} ${unitLabel} (ON)`
+                    : '0 (OFF)'
+                }`}
+              </text>
+              <text x="14" y="133" fontSize="8" fontFamily="Timeless Grotesk, Plus Jakarta Sans, Arial, sans-serif" fontWeight="bold" fill="#0F172A">
                 CAD: DieCut.Room
               </text>
 
@@ -1048,7 +1091,9 @@ export default function BoxPreview({
                 Board / ECT:
               </text>
               <text x="234" y="100" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#0F172A">
-                {`${gradeLabel} (${config.fluteThickness}mm) - ${config.engineering.ectValue} ECT - ${colorLabel}`}
+                {`${gradeLabel} (${config.fluteThickness}mm) - ${
+                  analysis ? Math.round(analysis.ectLbfIn) : config.engineering.ectValue
+                } ECT - ${colorLabel}`}
               </text>
 
               <text x="162" y="116" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#64748B">
@@ -1056,6 +1101,15 @@ export default function BoxPreview({
               </text>
               <text x="234" y="116" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#0F172A">
                 {`${config.advanced.flapGap}mm / ${config.advanced.slotGap}mm${config.advanced.fishtailCompensation ? ' (Anti-Fishtail)' : ''}`}
+              </text>
+
+              <text x="162" y="132" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#64748B">
+                Inner Flap:
+              </text>
+              <text x="234" y="132" fontSize="8.5" fontFamily="Arial, Helvetica, sans-serif" fill="#0F172A">
+                {config.advanced.compensateInnerFlapDepth
+                  ? `+${fmt(paths.info.depthAllowanceMm)} ${unitLabel} allowance (ID clean)`
+                  : '0 mm allowance (Direct score)'}
               </text>
 
               <line x1="396" y1="12" x2="396" y2={titleBlockHeight - 12} stroke="#E2E8F0" strokeWidth="1" />

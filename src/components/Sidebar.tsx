@@ -468,11 +468,25 @@ export default function Sidebar({
                   size="compact"
                   ariaLabel="Dimension input mode"
                   options={[
-                    { value: 'id', label: 'Direct ID' },
-                    { value: 'product', label: 'Product fit' },
+                    {
+                      value: 'id',
+                      label: 'Direct ID',
+                      title: 'Isi langsung ukuran dalam kardus (Panjang x Lebar x Tinggi)',
+                    },
+                    {
+                      value: 'product',
+                      label: 'Product fit',
+                      title: 'Hitung ukuran kardus otomatis dari ukuran fisik produk + kelonggaran',
+                    },
                   ]}
                 />
               </div>
+
+              <p className="text-[11.5px] leading-[16px] text-[var(--ink-10)]">
+                {config.inputMode === 'product'
+                  ? 'Product fit: masukkan ukuran fisik produk + kelonggaran (ΔL/ΔW/ΔD) agar ukuran dalam kardus & sisa ruang atas (headspace) dihitung otomatis.'
+                  : 'Direct ID: isi langsung ukuran bersih ruang dalam kardus (L × W × D) jika dimensi box sudah ditetapkan.'}
+              </p>
 
               {config.inputMode === 'product' ? (
                 <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3.5 space-y-3">

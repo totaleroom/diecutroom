@@ -64,6 +64,7 @@ TactileButton.displayName = 'TactileButton';
 export interface SegmentedOption<T extends string> {
   value: T;
   label: React.ReactNode;
+  title?: string;
 }
 
 interface TactileSegmentedProps<T extends string> {
@@ -110,7 +111,7 @@ export function TactileSegmented<T extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       className={`inline-flex items-center gap-0.5 bg-[var(--ink-3)] overflow-hidden ${trackPadding} ${trackRadius} ${
-        fullWidth ? 'w-full grid' : ''
+        fullWidth ? 'w-full grid' : 'shrink-0'
       } ${className}`}
       style={fullWidth ? { gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` } : undefined}
     >
@@ -123,6 +124,7 @@ export function TactileSegmented<T extends string>({
             role="radio"
             aria-checked={active}
             tabIndex={active ? 0 : -1}
+            title={opt.title}
             onClick={() => onChange(opt.value)}
             onKeyDown={(e) => handleKeyDown(e, idx)}
             className={`relative flex items-center justify-center gap-1.5 whitespace-nowrap font-medium tracking-[var(--tracking-label)] cursor-pointer select-none transition-colors duration-[var(--dur-hover)] ease-[var(--ease-out)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)] ${optHeight} ${pillRadius} ${

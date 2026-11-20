@@ -18,24 +18,29 @@ import {
   Minimize2,
   MoreHorizontal,
   SlidersHorizontal,
+  Download,
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import BoxPreview from './components/BoxPreview';
 import BCTInspectorRail from './components/BCTInspectorRail';
 import AuthGate from './components/AuthGate';
-import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallControl';
+import {
+  PWAInstallButton,
+  OfflineIndicator,
+  usePWAInstall,
+} from './components/PWAInstallControl';
 import { useWorkspaceLayout } from './hooks/useWorkspaceLayout';
 import { generateRSCDieline } from './utils/dieline';
 import { computeEngineeringAnalysis } from './utils/engineering';
 import { scheduleIdleWork } from './utils/browserEngine';
-import { formatValue } from './utils/units';
 import { authFetch, clearClientSessionToken } from './utils/apiSession';
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
-const Box3DViewer = lazy(() => import('./components/Box3DViewer'));
-const PalletizerWorkspace = lazy(() => import('./components/PalletizerWorkspace'));
-const EngineeringSheet = lazy(() => import('./components/EngineeringSheet'));
-const AdminUsersModal = lazy(() => import('./components/AdminUsersModal'));
-const ProjectsModal = lazy(() => import('./components/ProjectsModal'));
+const Box3DViewer = lazyWithRetry(() => import('./components/Box3DViewer'));
+const PalletizerWorkspace = lazyWithRetry(() => import('./components/PalletizerWorkspace'));
+const EngineeringSheet = lazyWithRetry(() => import('./components/EngineeringSheet'));
+const AdminUsersModal = lazyWithRetry(() => import('./components/AdminUsersModal'));
+const ProjectsModal = lazyWithRetry(() => import('./components/ProjectsModal'));
 import {
   AuthUser,
   BoxConfig,
@@ -66,6 +71,13 @@ export default function App() {
   const [engineeringSheetOpen, setEngineeringSheetOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerWidth, setHeaderWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+  const footerBrandTapsRef = useRef<number[]>([]);
+  const { isInstallable: canInstallPwa, isInstalled: isPwaInstalled, install: installPwa } =
+    usePWAInstall();
 
   const {
     isMobile,
@@ -164,7 +176,7 @@ export default function App() {
       tie: 3,
     },
     appearance: {
-      dimFontSize: 8,
+      dimFontSize: 12,
     },
     metadata: {
       userName: 'Technical Team',
@@ -235,6 +247,38 @@ export default function App() {
     }, 1500);
   }, [authUser]);
 
+  // Confirm React commit succeeded for index.html boot watchdog
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __DIECUT_MOUNTED__?: boolean }).__DIECUT_MOUNTED__ = true;
+    }
+  }, []);
+
+  // Hidden Admin Workspace Shortcut (Ctrl+Shift+A / Cmd+Shift+A)
+  useEffect(() => {
+    if (!authUser || authUser.role !== 'admin') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setAdminModalOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authUser]);
+
+  const handleFooterBrandSecretTap = () => {
+    if (!authUser || authUser.role !== 'admin') return;
+    const now = Date.now();
+    const recent = footerBrandTapsRef.current.filter((t) => now - t <= 2500);
+    recent.push(now);
+    footerBrandTapsRef.current = recent;
+    if (recent.length >= 5) {
+      footerBrandTapsRef.current = [];
+      setAdminModalOpen(true);
+    }
+  };
+
   useEffect(() => {
     if (!moreMenuOpen) return;
     const onPointerDown = (e: MouseEvent) => {
@@ -253,6 +297,30 @@ export default function App() {
     };
   }, [moreMenuOpen]);
 
+  // Measure actual <header> container width inside <main> so controls never collide when sidebars are open
+  useEffect(() => {
+    if (authChecking || !authUser) return;
+    const el = headerRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const w = Math.round(el.getBoundingClientRect().width);
+      if (w > 0) setHeaderWidth(w);
+    };
+    measure();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+
+    const ro = new ResizeObserver(() => {
+      measure();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [authChecking, authUser]);
+
   const handleLogout = async () => {
     setMoreMenuOpen(false);
     await authFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -266,7 +334,6 @@ export default function App() {
   const paths = useMemo(() => generateRSCDieline(config), [config]);
   const analysis = useMemo(() => computeEngineeringAnalysis(config, paths), [config, paths]);
   const activeStyle = BOX_STYLES.find((s) => s.id === config.boxStyle) || BOX_STYLES[0];
-  const fmt = (mm: number) => formatValue(mm, config.unit);
 
   const handleToggleLayer = (layer: keyof LayerVisibility) => {
     setLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
@@ -313,7 +380,19 @@ export default function App() {
   const setLeftRailOpen = viewMode === 'pallet' ? setPalletConfigOpen : setSpecsOpen;
   const leftRailLabel = viewMode === 'pallet' ? 'Pallet' : 'Specs';
   const showMobileBottomDock = isMobile && !isShortLandscape;
-  const headerResponsiveActionClass = isShortLandscape ? 'inline-flex' : 'hidden md:inline-flex';
+
+  // Container-aware header density tiers (based on actual <header> width inside <main>)
+  const showHeaderRailActions = !showMobileBottomDock;
+  const compactSegmentedLabel = headerWidth < 430;
+  const showSideToggleLabels = headerWidth >= 700;
+  const showBctButtonInline = headerWidth >= 420;
+  const showProyekInline = headerWidth >= 820;
+  const showFullUtilitiesInline = headerWidth >= (authUser.role === 'admin' ? 1060 : 960);
+  const showOverflowButton =
+    !showBctButtonInline ||
+    !showHeaderRailActions ||
+    !showProyekInline ||
+    !showFullUtilitiesInline;
 
   return (
     <div className="relative flex h-[100dvh] w-full bg-[var(--ground)] text-[var(--ink-12)] overflow-hidden">
@@ -357,25 +436,27 @@ export default function App() {
         ))}
 
       <main className="surface-panel flex-1 flex flex-col min-w-0 overflow-hidden bg-[var(--surface-top)]">
-        {/* Adaptive Anti-Clip Workspace Mode Header */}
+        {/* Container-Aware Anti-Clip Workspace Mode Header */}
         <header
+          ref={headerRef}
           className={`${
             isShortLandscape ? 'h-[44px]' : 'h-[52px]'
           } border-b-[0.5px] border-[var(--line)] bg-[var(--surface-top)] flex items-center justify-between px-2.5 sm:px-4 shrink-0 gap-2 sm:gap-3`}
         >
-          <div className="flex items-center gap-2 min-w-0">
-            {!focusMode && (
+          <div className="flex items-center gap-2 shrink-0">
+            {!focusMode && showHeaderRailActions && (
               <TactileButton
                 type="button"
                 variant={leftRailOpen ? 'primary' : 'secondary'}
                 size="compact"
-                className={`${headerResponsiveActionClass} shrink-0`}
+                className="shrink-0"
                 onClick={() => setLeftRailOpen(!leftRailOpen)}
                 aria-pressed={leftRailOpen}
+                aria-label={leftRailOpen ? `Tutup panel ${leftRailLabel}` : `Buka panel ${leftRailLabel}`}
                 title={leftRailOpen ? `Tutup panel ${leftRailLabel}` : `Buka panel ${leftRailLabel}`}
               >
                 <PanelLeft size={14} />
-                <span className="hidden lg:inline">{leftRailLabel}</span>
+                {showSideToggleLabels && <span>{leftRailLabel}</span>}
               </TactileButton>
             )}
 
@@ -388,31 +469,31 @@ export default function App() {
               options={[
                 {
                   value: '2d',
+                  title: '2D Dieline CAD',
                   label: (
                     <>
                       <Monitor size={14} />
-                      <span className="hidden 2xl:inline">2D dieline CAD</span>
-                      <span className="2xl:hidden">2D</span>
+                      <span>2D</span>
                     </>
                   ),
                 },
                 {
                   value: '3d',
+                  title: '3D Fit Simulation',
                   label: (
                     <>
                       <BoxIcon size={14} />
-                      <span className="hidden 2xl:inline">3D fit simulation</span>
-                      <span className="2xl:hidden">3D</span>
+                      <span>3D</span>
                     </>
                   ),
                 },
                 {
                   value: 'pallet',
+                  title: 'Palletizer & Case Pack',
                   label: (
                     <>
                       <Layers size={14} />
-                      <span className="hidden sm:inline">Palletizer</span>
-                      <span className="sm:hidden">Pallet</span>
+                      <span>{compactSegmentedLabel ? 'Pallet' : 'Palletizer'}</span>
                     </>
                   ),
                 },
@@ -420,56 +501,45 @@ export default function App() {
             />
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 shrink-0">
-            <div className="hidden 2xl:flex items-center gap-2 text-[12px] leading-[16px] text-[var(--ink-10)] overflow-hidden mr-1">
-              <span className="text-[var(--ink-12)] whitespace-nowrap">{activeStyle.code}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                ID {`${fmt(paths.info.innerDimensions.length)} x ${fmt(paths.info.innerDimensions.width)} x ${fmt(paths.info.innerDimensions.depth)} ${config.unit}`}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                OD {`${fmt(paths.info.outerDimensions.length)} x ${fmt(paths.info.outerDimensions.width)} x ${fmt(paths.info.outerDimensions.depth)} ${config.unit}`}
-              </span>
-            </div>
-
-            <TactileButton
-              type="button"
-              variant="secondary"
-              size="compact"
-              className="hidden xl:inline-flex"
-              onClick={() => setProjectsModalOpen(true)}
-              title="Simpan atau muat proyek box dieline"
-            >
-              <FolderOpen size={13} className="text-[var(--ink-10)]" />
-              <span>Proyek</span>
-            </TactileButton>
-
-            <TactileButton
-              type="button"
-              variant="secondary"
-              size="compact"
-              className="hidden md:inline-flex"
-              onClick={() => setEngineeringSheetOpen(true)}
-              title={
-                totalAlerts > 0
-                  ? `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf · ${totalAlerts} peringatan pre-flight`
-                  : `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf`
-              }
-            >
-              <span className={`size-[7px] rounded-full ${statusDotClass}`} />
-              <ShieldCheck size={14} className="text-[var(--ink-10)]" />
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
-              </span>
-            </TactileButton>
-
-            {authUser.role === 'admin' && (
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {showProyekInline && (
               <TactileButton
                 type="button"
                 variant="secondary"
                 size="compact"
-                className="hidden xl:inline-flex"
+                onClick={() => setProjectsModalOpen(true)}
+                title="Simpan atau muat proyek box dieline"
+              >
+                <FolderOpen size={13} className="text-[var(--ink-10)]" />
+                <span>Proyek</span>
+              </TactileButton>
+            )}
+
+            {showBctButtonInline && (
+              <TactileButton
+                type="button"
+                variant="secondary"
+                size="compact"
+                onClick={() => setEngineeringSheetOpen(true)}
+                title={
+                  totalAlerts > 0
+                    ? `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf · ${totalAlerts} peringatan pre-flight`
+                    : `Corrected BCT ${Math.round(analysis.correctedBctKgf)} kgf`
+                }
+              >
+                <span className={`size-[7px] rounded-full ${statusDotClass}`} />
+                <ShieldCheck size={14} className="text-[var(--ink-10)]" />
+                <span className="font-mono tabular-nums whitespace-nowrap">
+                  {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
+                </span>
+              </TactileButton>
+            )}
+
+            {showFullUtilitiesInline && authUser.role === 'admin' && (
+              <TactileButton
+                type="button"
+                variant="secondary"
+                size="compact"
                 onClick={() => setAdminModalOpen(true)}
                 title="Kelola akun user, aktivasi, reset password & hapus"
               >
@@ -478,147 +548,179 @@ export default function App() {
               </TactileButton>
             )}
 
-            <div className="hidden xl:flex items-center">
-              <PWAInstallButton />
-            </div>
+            {showFullUtilitiesInline && (
+              <div className="flex items-center">
+                <PWAInstallButton />
+              </div>
+            )}
 
-            <TactileButton
-              type="button"
-              variant={focusMode ? 'primary' : 'secondary'}
-              size="compact"
-              className={headerResponsiveActionClass}
-              onClick={toggleFocusMode}
-              aria-pressed={focusMode}
-              title={focusMode ? 'Keluar dari Mode Fokus (F / Esc)' : 'Mode Fokus Kanvas Penuh (F)'}
-            >
-              {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              <span className="hidden lg:inline">{focusMode ? 'Keluar Fokus' : 'Fokus'}</span>
-            </TactileButton>
+            {showHeaderRailActions && (
+              <TactileButton
+                type="button"
+                variant={focusMode ? 'primary' : 'secondary'}
+                size="compact"
+                onClick={toggleFocusMode}
+                aria-pressed={focusMode}
+                aria-label={focusMode ? 'Keluar dari Mode Fokus' : 'Mode Fokus Kanvas Penuh'}
+                title={focusMode ? 'Keluar dari Mode Fokus (F / Esc)' : 'Mode Fokus Kanvas Penuh (F)'}
+              >
+                {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                {showSideToggleLabels && <span>{focusMode ? 'Keluar Fokus' : 'Fokus'}</span>}
+              </TactileButton>
+            )}
 
-            {!focusMode && (
+            {!focusMode && showHeaderRailActions && (
               <TactileButton
                 type="button"
                 variant={bctOpen ? 'primary' : 'secondary'}
                 size="compact"
-                className={headerResponsiveActionClass}
                 onClick={() => setBctOpen(!bctOpen)}
                 aria-pressed={bctOpen}
-                title="Toggle BCT Pro right sidebar"
+                aria-label={bctOpen ? 'Tutup panel BCT Pro' : 'Buka panel BCT Pro'}
+                title={bctOpen ? 'Tutup panel BCT Pro' : 'Buka panel BCT Pro'}
               >
                 {!bctOpen && totalAlerts > 0 && (
                   <span className={`size-[7px] rounded-full ${statusDotClass}`} />
                 )}
                 <PanelRight size={14} />
-                <span className={isShortLandscape ? 'hidden sm:inline' : ''}>BCT Pro</span>
+                {showSideToggleLabels && <span>BCT Pro</span>}
               </TactileButton>
             )}
 
-            <TactileButton
-              type="button"
-              variant="ghost"
-              size="compact"
-              className="hidden xl:inline-flex"
-              onClick={handleLogout}
-              title={`Keluar (${authUser.email})`}
-            >
-              <LogOut size={13} />
-              <span>Keluar</span>
-            </TactileButton>
-
-            {/* Compact / Tablet / Mobile Overflow Action Menu */}
-            <div ref={moreMenuRef} className="relative xl:hidden">
+            {showFullUtilitiesInline && (
               <TactileButton
                 type="button"
-                variant="secondary"
+                variant="ghost"
                 size="compact"
-                className="px-2 min-w-[34px] h-[34px] md:h-[var(--control-h-compact)]"
-                onClick={() => setMoreMenuOpen((v) => !v)}
-                aria-expanded={moreMenuOpen}
-                aria-haspopup="menu"
-                aria-label="Menu lainnya"
-                title="Menu lainnya"
+                onClick={handleLogout}
+                title={`Keluar (${authUser.email})`}
               >
-                <MoreHorizontal size={15} />
+                <LogOut size={13} />
+                <span>Keluar</span>
               </TactileButton>
+            )}
 
-              {moreMenuOpen && (
-                <div
-                  role="menu"
-                  className="absolute right-0 top-[calc(100%+6px)] w-56 surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] p-1.5 z-50 flex flex-col gap-0.5"
+            {/* Container-Adaptive Overflow Action Menu */}
+            {showOverflowButton && (
+              <div ref={moreMenuRef} className="relative shrink-0">
+                <TactileButton
+                  type="button"
+                  variant="secondary"
+                  size="compact"
+                  className="px-2 min-w-[34px] h-[34px] md:h-[var(--control-h-compact)]"
+                  onClick={() => setMoreMenuOpen((v) => !v)}
+                  aria-expanded={moreMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="Menu lainnya"
+                  title="Menu lainnya"
                 >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      setEngineeringSheetOpen(true);
-                    }}
-                    className="md:hidden w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center justify-between text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                  <MoreHorizontal size={15} />
+                </TactileButton>
+
+                {moreMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-[calc(100%+6px)] w-56 surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] p-1.5 z-50 flex flex-col gap-0.5"
                   >
-                    <span className="flex items-center gap-2">
-                      <ShieldCheck size={14} className="text-[var(--ink-10)]" />
-                      <span className="font-mono tabular-nums">
-                        {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
-                      </span>
-                    </span>
-                    <span className={`size-[7px] rounded-full ${statusDotClass}`} />
-                  </button>
+                    {!showBctButtonInline && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          setEngineeringSheetOpen(true);
+                        }}
+                        className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center justify-between text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                      >
+                        <span className="flex items-center gap-2">
+                          <ShieldCheck size={14} className="text-[var(--ink-10)]" />
+                          <span className="font-mono tabular-nums">
+                            {`BCT ${Math.round(analysis.correctedBctKgf)} kgf`}
+                          </span>
+                        </span>
+                        <span className={`size-[7px] rounded-full ${statusDotClass}`} />
+                      </button>
+                    )}
 
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      toggleFocusMode();
-                    }}
-                    className="md:hidden w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
-                  >
-                    {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                    <span>{focusMode ? 'Keluar Mode Fokus' : 'Mode Fokus Kanvas'}</span>
-                  </button>
+                    {!showHeaderRailActions && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          toggleFocusMode();
+                        }}
+                        className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                      >
+                        {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                        <span>{focusMode ? 'Keluar Mode Fokus' : 'Mode Fokus Kanvas'}</span>
+                      </button>
+                    )}
 
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      setProjectsModalOpen(true);
-                    }}
-                    className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
-                  >
-                    <FolderOpen size={14} className="text-[var(--ink-10)]" />
-                    <span>Proyek Tersimpan</span>
-                  </button>
+                    {!showProyekInline && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          setProjectsModalOpen(true);
+                        }}
+                        className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                      >
+                        <FolderOpen size={14} className="text-[var(--ink-10)]" />
+                        <span>Proyek Tersimpan</span>
+                      </button>
+                    )}
 
-                  {authUser.role === 'admin' && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMoreMenuOpen(false);
-                        setAdminModalOpen(true);
-                      }}
-                      className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
-                    >
-                      <Users size={14} className="text-[var(--ink-10)]" />
-                      <span>Kelola Users</span>
-                    </button>
-                  )}
+                    {!showFullUtilitiesInline && authUser.role === 'admin' && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          setAdminModalOpen(true);
+                        }}
+                        className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                      >
+                        <Users size={14} className="text-[var(--ink-10)]" />
+                        <span>Kelola Users</span>
+                      </button>
+                    )}
 
-                  <div className="my-1 border-t-[0.5px] border-[var(--line)]" />
+                    {!showFullUtilitiesInline && !isPwaInstalled && canInstallPwa && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          void installPwa();
+                        }}
+                        className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer"
+                      >
+                        <Download size={14} className="text-[var(--ink-10)]" />
+                        <span>Install App</span>
+                      </button>
+                    )}
 
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={handleLogout}
-                    className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--red-11)] hover:bg-[var(--red-3)] cursor-pointer"
-                  >
-                    <LogOut size={14} />
-                    <span>Keluar ({authUser.name})</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                    {!showFullUtilitiesInline && (
+                      <>
+                        <div className="my-1 border-t-[0.5px] border-[var(--line)]" />
+
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={handleLogout}
+                          className="w-full min-h-[40px] px-3 rounded-[var(--radius-control)] flex items-center gap-2 text-[13px] text-[var(--red-11)] hover:bg-[var(--red-3)] cursor-pointer"
+                        >
+                          <LogOut size={14} />
+                          <span className="truncate">Keluar ({authUser.name})</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </header>
 
@@ -655,6 +757,7 @@ export default function App() {
             <BoxPreview
               paths={paths}
               config={config}
+              analysis={analysis}
               layers={layers}
               onToggleLayer={handleToggleLayer}
               exportMode={exportMode}
@@ -713,21 +816,28 @@ export default function App() {
               <span className="font-mono tabular-nums shrink-0">
                 Area <span className="text-[var(--ink-12)]">{paths.info.totalAreaSqM.toFixed(3)} m²</span>
               </span>
-              <span aria-hidden="true" className="hidden xl:inline">
-                ·
-              </span>
-              <span className="font-mono tabular-nums hidden xl:inline shrink-0">
-                Max stack{' '}
-                <span className="text-[var(--ink-12)]">{analysis.maxStackingLoadKgf.toFixed(1)} kgf</span>
-              </span>
-              <span aria-hidden="true" className="hidden 2xl:inline">
-                ·
-              </span>
-              <span className="hidden 2xl:inline truncate">
-                Akun <span className="text-[var(--ink-12)]">{authUser.name}</span>
-              </span>
+              {headerWidth >= 720 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono tabular-nums shrink-0">
+                    Max stack{' '}
+                    <span className="text-[var(--ink-12)]">{analysis.maxStackingLoadKgf.toFixed(1)} kgf</span>
+                  </span>
+                </>
+              )}
+              {headerWidth >= 900 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">
+                    Akun <span className="text-[var(--ink-12)]">{authUser.name}</span>
+                  </span>
+                </>
+              )}
             </div>
-            <div className="flex items-center gap-2 text-[var(--ink-10)] whitespace-nowrap shrink-0">
+            <div
+              onClick={handleFooterBrandSecretTap}
+              className="flex items-center gap-2 text-[var(--ink-10)] whitespace-nowrap shrink-0 select-none"
+            >
               <span>Made by</span>
               <img
                 src="/assets/aistudio/Asset_2_5ca58983.svg"
@@ -843,7 +953,15 @@ export default function App() {
 
       {/* Slide-Over Engineering, Costing & Field-Defect Sheet */}
       {engineeringSheetOpen && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--backdrop)] text-[12px] text-[var(--ink-12)]">
+              <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] px-4 py-2.5 shadow-[var(--shadow-modal)]">
+                Memuat Engineering Sheet...
+              </div>
+            </div>
+          }
+        >
           <EngineeringSheet
             open={engineeringSheetOpen}
             onClose={() => setEngineeringSheetOpen(false)}
@@ -857,7 +975,15 @@ export default function App() {
 
       {/* Per-Account Saved Box Projects Modal */}
       {projectsModalOpen && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--backdrop)] text-[12px] text-[var(--ink-12)]">
+              <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] px-4 py-2.5 shadow-[var(--shadow-modal)]">
+                Memuat Proyek Tersimpan...
+              </div>
+            </div>
+          }
+        >
           <ProjectsModal
             open={projectsModalOpen}
             currentConfig={config}
@@ -867,13 +993,24 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* Admin User Lifecycle Console */}
+      {/* Admin Command Console */}
       {authUser.role === 'admin' && adminModalOpen && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--backdrop)] text-[12px] text-[var(--ink-12)]">
+              <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] px-4 py-2.5 shadow-[var(--shadow-modal)]">
+                Memuat Konsol Admin...
+              </div>
+            </div>
+          }
+        >
           <AdminUsersModal
             open={adminModalOpen}
             currentUser={authUser}
             onClose={() => setAdminModalOpen(false)}
+            onUserUpdated={(patch) =>
+              setAuthUser((prev) => (prev ? { ...prev, ...patch } : prev))
+            }
           />
         </Suspense>
       )}

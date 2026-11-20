@@ -80,15 +80,25 @@ function createCardboardTexture(
 }
 
 function disposeObject3D(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+
   root.traverse((obj) => {
-    const geom = (obj as THREE.Mesh).geometry;
-    if (geom) geom.dispose();
-    const mat = (obj as THREE.Mesh).material;
-    if (mat) {
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-      else mat.dispose();
+    const renderObj = obj as THREE.Mesh | THREE.Line | THREE.LineSegments;
+    if (renderObj.geometry) {
+      geometries.add(renderObj.geometry);
+    }
+    if (renderObj.material) {
+      if (Array.isArray(renderObj.material)) {
+        renderObj.material.forEach((m) => materials.add(m));
+      } else {
+        materials.add(renderObj.material);
+      }
     }
   });
+
+  geometries.forEach((g) => g.dispose());
+  materials.forEach((m) => m.dispose());
 }
 
 function addRoundedRectHole(
@@ -219,6 +229,42 @@ interface HingeRefs {
   tearAnimator: TearAnimator | null;
   hasTopFlaps: boolean;
   isOverlapOuter: boolean;
+}
+
+function applyHingeFoldKinematics(h: HingeRefs | null, t: number) {
+  if (!h) return;
+
+  const wallT = THREE.MathUtils.clamp(t / 0.55, 0, 1);
+  const wallAngle = wallT * (Math.PI / 2);
+  h.w1.rotation.y = wallAngle;
+  h.l1.rotation.y = wallAngle;
+  h.glue.rotation.y = wallAngle;
+  h.w2.rotation.y = -wallAngle;
+
+  const botInnerT = THREE.MathUtils.clamp((t - 0.45) / 0.25, 0, 1);
+  const botOuterT = THREE.MathUtils.clamp((t - 0.58) / 0.25, 0, 1);
+  h.botFlapsInner.forEach((g) => {
+    g.rotation.x = -botInnerT * (Math.PI / 2);
+  });
+  h.botFlapsOuter.forEach((g) => {
+    g.rotation.x = -botOuterT * (Math.PI / 2);
+  });
+
+  if (h.hasTopFlaps) {
+    const topInnerT = THREE.MathUtils.clamp((t - 0.65) / 0.25, 0, 1);
+    const topOuterT = THREE.MathUtils.clamp((t - 0.78) / 0.22, 0, 1);
+    h.topFlapsInner.forEach((g) => {
+      g.rotation.x = topInnerT * (Math.PI / 2);
+    });
+    h.topFlapsOuter.forEach((g, idx) => {
+      const maxAng = h.isOverlapOuter && idx === 1 ? Math.PI / 2 - 0.025 : Math.PI / 2;
+      g.rotation.x = topOuterT * maxAng;
+    });
+  }
+
+  const prodScale = THREE.MathUtils.lerp(0.85, 1.0, wallT);
+  h.productGroup.scale.setScalar(prodScale);
+  h.productGroup.visible = t > 0.2;
 }
 
 export default function Box3DViewer({
@@ -445,43 +491,6 @@ export default function Box3DViewer({
       frameId = window.setTimeout(poll, 5);
     }
 
-    function applyFoldKinematics(t: number) {
-      const h = hingesRef.current;
-      if (!h) return;
-
-      const wallT = THREE.MathUtils.clamp(t / 0.55, 0, 1);
-      const wallAngle = wallT * (Math.PI / 2);
-      h.w1.rotation.y = wallAngle;
-      h.l1.rotation.y = wallAngle;
-      h.glue.rotation.y = wallAngle;
-      h.w2.rotation.y = -wallAngle;
-
-      const botInnerT = THREE.MathUtils.clamp((t - 0.45) / 0.25, 0, 1);
-      const botOuterT = THREE.MathUtils.clamp((t - 0.58) / 0.25, 0, 1);
-      h.botFlapsInner.forEach((g) => {
-        g.rotation.x = -botInnerT * (Math.PI / 2);
-      });
-      h.botFlapsOuter.forEach((g) => {
-        g.rotation.x = -botOuterT * (Math.PI / 2);
-      });
-
-      if (h.hasTopFlaps) {
-        const topInnerT = THREE.MathUtils.clamp((t - 0.65) / 0.25, 0, 1);
-        const topOuterT = THREE.MathUtils.clamp((t - 0.78) / 0.22, 0, 1);
-        h.topFlapsInner.forEach((g) => {
-          g.rotation.x = topInnerT * (Math.PI / 2);
-        });
-        h.topFlapsOuter.forEach((g, idx) => {
-          const maxAng = h.isOverlapOuter && idx === 1 ? Math.PI / 2 - 0.025 : Math.PI / 2;
-          g.rotation.x = topOuterT * maxAng;
-        });
-      }
-
-      const prodScale = THREE.MathUtils.lerp(0.85, 1.0, wallT);
-      h.productGroup.scale.setScalar(prodScale);
-      h.productGroup.visible = t > 0.2;
-    }
-
     function requestRender() {
       if (renderBusy) {
         renderDirty = true;
@@ -507,7 +516,7 @@ export default function Box3DViewer({
         } else {
           currentFoldRef.current = targetFoldRef.current;
         }
-        applyFoldKinematics(currentFoldRef.current);
+        applyHingeFoldKinematics(hingesRef.current, currentFoldRef.current);
 
         // Smooth tear / perforation opening damping
         if (Math.abs(currentTearRef.current - targetTearRef.current) > 0.0008) {
@@ -610,7 +619,11 @@ export default function Box3DViewer({
       shadowGeo.dispose();
       shadowMat.dispose();
       disposeObject3D(rootGroup);
+      rootGroup.clear();
       renderer.dispose();
+      if (renderer.domElement.parentNode === container) {
+        container.removeChild(renderer.domElement);
+      }
     };
   }, []);
 
@@ -620,6 +633,7 @@ export default function Box3DViewer({
     if (!root) return;
 
     disposeObject3D(root);
+    root.clear();
     if (outerTexRef.current) {
       outerTexRef.current.dispose();
       outerTexRef.current = null;
@@ -1706,6 +1720,15 @@ export default function Box3DViewer({
       hasTopFlaps: panelCoords.hasTopFlaps,
       isOverlapOuter: config.boxStyle === '0202' || config.boxStyle === '0203',
     };
+
+    applyHingeFoldKinematics(hingesRef.current, currentFoldRef.current);
+    if (hingesRef.current.tearAnimator) {
+      hingesRef.current.tearAnimator.apply(
+        currentTearRef.current,
+        isXray ? 0.36 : 1.0,
+        isXray
+      );
+    }
 
     requestRenderRef.current();
   }, [

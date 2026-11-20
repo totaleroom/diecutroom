@@ -923,6 +923,87 @@ export interface AuthUser {
 export interface AdminUserRecord extends AuthUser {
   historyCount: number;
   projectCount: number;
+  failedLoginCount: number;
+  lockedUntil: string | null;
+  tokenVersion: number;
+}
+
+export type AuditEventCategory = 'all' | 'auth' | 'failed' | 'account' | 'security';
+
+export interface AuditLogEntry {
+  id: string;
+  eventType: string;
+  severity: 'info' | 'warning' | 'critical';
+  actorEmail: string;
+  targetEmail: string;
+  detail: string;
+  ipAddress: string;
+  origin: string;
+  createdAt: string;
+}
+
+export interface AdminAlertItem {
+  id: string;
+  severity: 'critical' | 'warning' | 'info' | 'ok';
+  title: string;
+  detail: string;
+  actionTab?: 'users' | 'audit' | 'security';
+  actionFilter?: 'pending' | 'all';
+}
+
+export interface AdminSmtpSettings {
+  source: 'console' | 'env' | 'none';
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  from: string;
+  hasPassword: boolean;
+}
+
+export interface AdminHealthRadar {
+  generatedAt: string;
+  runtime: {
+    nodeVersion: string;
+    platform: string;
+    uptimeSec: number;
+    rssMb: number;
+    heapUsedMb: number;
+    memLimitMb: number;
+    rssPctOfLimit: number;
+    dbSizeBytes: number;
+    walSizeBytes: number;
+    diskFreeBytes: number | null;
+    diskTotalBytes: number | null;
+  };
+  environment: {
+    nodeEnv: string;
+    isHttps: boolean;
+    trustProxy: boolean;
+    cookieMode: string;
+    hasStrongSessionSecret: boolean;
+    hasEnvRecoveryKey: boolean;
+    hasDbRecoveryKey: boolean;
+    recoveryKeyRotatedAt: string | null;
+    smtpConfigured: boolean;
+    smtpSource: 'console' | 'env' | 'none';
+    lastBackupAt: string | null;
+    distBuilt: boolean;
+    swBuilt: boolean;
+  };
+  metrics: {
+    totalUsers: number;
+    pendingUsers: number;
+    stalePendingUsers: number;
+    activeUsers: number;
+    activeAdmins: number;
+    disabledUsers: number;
+    lockedUsers: number;
+    failedLogins24h: number;
+    totalProjects: number;
+    totalHistory: number;
+  };
+  alerts: AdminAlertItem[];
 }
 
 export interface SavedBoxProject {
@@ -1230,5 +1311,12 @@ export const DEFAULT_PALLET_CONFIG: PalletConfig = {
   recommendationMode: 'smart',
   manualLayerCount: null,
 };
+
+export interface AgentApiKeyInfo {
+  configured: boolean;
+  prefix: string | null;
+  updatedAt: string | null;
+  skillVersion: string;
+}
 
 

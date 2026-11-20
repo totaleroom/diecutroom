@@ -40,10 +40,10 @@ export function generateRSCDieline(config: BoxConfig): DielinePaths {
   const dPanel = D + depthAllowanceMm;
 
   // True Outer Dimensions (OD):
-  // Wall thickness adds 2*T to Length and Width; top & bottom double flap layers add 4*T (or 2*T for HSC)
+  // Wall thickness adds 2*T to Length and Width; outer flaps add 2*T (or T for HSC) outside dPanel
   const outerL = L + 2 * T;
   const outerW = W + 2 * T;
-  const outerD = D + (hasTopFlaps ? 4 * T : 2 * T);
+  const outerD = dPanel + (hasTopFlaps ? 2 * T : T);
 
   // Flap lengths by FEFCO standard (measured from fold centerline wPanel = W + T)
   let bottomFlapL = Math.max(10, (wPanel - flapGap) / 2);
@@ -591,7 +591,7 @@ export function generateRSCDieline(config: BoxConfig): DielinePaths {
     const finalW = frameWidth;
     const finalH = r(frameHeight + hriHeight);
 
-    const bcX = panelRight - marginX - finalW;
+    const bcX = panelLeft + (panelW - finalW) / 2;
     const bcY = y2 - marginY - finalH;
 
     barcodeBox = {
