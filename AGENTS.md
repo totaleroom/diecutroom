@@ -4,21 +4,27 @@ Dokumen ini adalah kontrak kerja wajib bagi setiap **AI Agent** — baik **Codin
 
 ---
 
-## 0. First-Scan Protocol, Truth Order & Visual Design Anchor (Untuk Coding Agent)
+## 0. First-Scan Protocol, Truth Order, Credit-Saving & Visual Design Anchor (Untuk Coding Agent)
 
 1. **Truth Order (Urutan Kebenaran)**:
-   `Kode aktual di HEAD` → `git diff <verified_at_commit>..HEAD` → [`docs/STATUS.md`](./docs/STATUS.md) → `AGENTS.md` → `docs/01`–`08` & `README.md`.
-2. **Automatic First-Scan (< 5 detik, tanpa butuh `node_modules`)**:
-   - Baca [`docs/STATUS.md`](./docs/STATUS.md) untuk melihat *Capability Ledger*, peta modul, skema SQLite 5 tabel, dan *Known Gaps*.
-   - Jalankan `node scripts/check-docs-drift.ts` (`npm run docs:check`) untuk mendeteksi apakah ada route `/api/*`, tabel/kolom SQLite, variabel env, atau skrip baru yang lebih mutakhir daripada dokumentasi.
+   `Kode aktual di HEAD` → `git diff <verified_at_commit>..HEAD` → [`docs/STATUS.md`](./docs/STATUS.md) → [`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md) → [`DESIGN.md`](./DESIGN.md) → `AGENTS.md` → `docs/01`–`08`.
+2. **Automatic First-Scan & Credit-Saving Protocol (< 5 detik, tanpa butuh `node_modules`)**:
+   - Baca [`docs/STATUS.md`](./docs/STATUS.md) (Capability Ledger) dan [`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md) (peta file, ekspor simbol, rentang baris file besar, & nomor baris 43 endpoint `/api/*`).
+   - **Hemat Kredit/Token**: Jangan membaca file besar (`server.ts`, `PalletizerWorkspace.tsx`, `Box3DViewer.tsx`, `palletizerReportPdf.ts`) secara penuh jika hanya butuh satu fungsi/endpoint — gunakan nomor baris dari `docs/CODEBASE_INDEX.md` untuk bacaan terarah.
+   - Jalankan `node scripts/check-docs-drift.ts` (`npm run docs:check`) untuk mendeteksi drift dokumentasi/indeks.
 3. **Visual Design Fidelity Anchor**:
-   - Wajib ikuti [`.agents/skills/tactile-design/SKILL.md`](./.agents/skills/tactile-design/SKILL.md) serta aturan [`.agents/rules/project.md`](./.agents/rules/project.md).
-   - Pertahankan token warna **Precision Tactile Studio** pada `src/index.css` (`#17191F`, `#474D58`, `#5C626E`, `#CDD2DB`, `#ECEEF1`, `#F4F5F7`, `#4F46E5`) dan primitif di `src/components/tactile/TactileUI.tsx` (juga menjadi acuan warna Laporan PDF Palletizer A4 2 Halaman).
+   - Wajib ikuti [`DESIGN.md`](./DESIGN.md) (kontrak visual produk di root), [`.agents/skills/tactile-design/SKILL.md`](./.agents/skills/tactile-design/SKILL.md), serta [`.agents/rules/project.md`](./.agents/rules/project.md).
+   - Pertahankan token warna **Precision Tactile Studio** pada `src/index.css` (`#17191F`, `#474D58`, `#5C626E`, `#CDD2DB`, `#ECEEF1`, `#F4F5F7`, `#4F46E5`), primitif `src/components/tactile/TactileUI.tsx`, dan kartu *Halftone Offset-Sheet* `2px`.
    - Logo resmi produksi **Totale.Room** tersimpan di `public/assets/aistudio/Asset_2_5ca58983.svg`. Lampiran PNG/PDF lain di `public/assets/aistudio/` hanyalah artefak referensi diskusi, bukan aset UI produksi.
-4. **Platform & Post-Commit Hygiene**:
+4. **Cross-Builder Guardrails (Vercel / v0 / Lovable / Base44 / Cursor / ADE)**:
+   - **JANGAN menulis ulang backend ke Supabase, Base44 SDK, atau Vercel Serverless SQLite.** Backend aplikasi ini adalah **Express + `node:sqlite` WAL (`server.ts`)** yang berjalan persisten di VPS Debian / Docker.
+   - Untuk live bersama **Landing Page Utama Astro (`totaleroom.com`)**, deploy **DieCut.Room** pada **subdomain terpisah (`diecut.totaleroom.com`)** menggunakan salah satu dari 2 jalur resmi:
+     - **Jalur Monolith VPS (Prioritas, 0 kredit AI)**: Docker Slim (`~160 MB`) atau PM2 di VPS Debian (`same-origin`, `VITE_API_BASE_URL` dikosongkan).
+     - **Jalur Split Deploy (Opsional)**: Frontend statis di Vercel (`vercel.json` + `VITE_API_BASE_URL=https://api-diecut.totaleroom.com`) mengarah ke backend VPS (`CORS_ALLOWED_ORIGINS=https://diecut.totaleroom.com`).
+5. **Platform & Post-Commit Hygiene**:
    - Biarkan `metadata.json` utuh (digunakan oleh runtime Google AI Studio).
-   - `automated_tests: NOT PRESENT` (tidak ada skrip `test` di `package.json`). Verifikasi menggunakan `npm run lint`, `npm run build`, dan `npm run docs:check -- --strict`.
-   - Setiap commit yang mengubah route `/api/*`, skema SQLite, variabel env, skrip npm, atau fitur utama wajib memperbarui [`docs/STATUS.md`](./docs/STATUS.md) dan lulus `npm run docs:check -- --strict`.
+   - `automated_tests: NOT PRESENT` (tidak ada skrip `test` di `package.json`). Verifikasi menggunakan `npm run lint`, `npm run build`, `npm run index:build`, dan `npm run docs:check -- --strict`.
+   - Setiap commit yang mengubah struktur modul, route `/api/*`, skema SQLite, variabel env, atau fitur utama wajib menjalankan `npm run index:build`, memperbarui [`docs/STATUS.md`](./docs/STATUS.md), dan lulus `npm run docs:check -- --strict`.
 
 > **Runbook Deploy VPS Debian Langkah-demi-Langkah:**  
 > Baca dan eksekusi secara berurutan dokumen [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md) sebelum menjalankan perintah perubahan sistem VPS apa pun.
@@ -39,11 +45,12 @@ Dokumen ini adalah kontrak kerja wajib bagi setiap **AI Agent** — baik **Codin
   - `npm run build` → mem-build frontend + Service Worker PWA ke `./dist/`.
   - `NODE_ENV=production npm start` → menjalankan `node server.ts` (native TypeScript type-stripping Node v22+, tidak butuh transpilasi terpisah).
   - `npm run admin:reset` → utilitas CLI pemulihan darurat Admin (`node scripts/admin-reset.ts`).
-  - `npm run docs:check` → detektor drift dokumentasi zero-dependency (`node scripts/check-docs-drift.ts`, tambahkan `-- --strict` untuk mode ketat).
+  - `npm run index:build` → generator indeks codebase zero-dependency (`node scripts/generate-codebase-index.ts` → `docs/CODEBASE_INDEX.md`).
+  - `npm run docs:check` → detektor drift dokumentasi & indeks zero-dependency (`node scripts/check-docs-drift.ts`, tambahkan `-- --strict` untuk mode ketat).
   - `Test`: **NOT PRESENT** (tidak ada skrip `npm test`).
 - **Variabel Build-Time vs Runtime**:
-  - **Build-Time**: `VITE_WHATSAPP_ADMIN` dan file font berlisensi opsional di `public/fonts/` (`TimelessGrotesk*.woff2`) disisipkan saat **`npm run build` / `docker compose build`**. Jika diubah, wajib rebuild frontend.
-  - **Runtime**: `IMAGE_TAG`, `PORT`, `HOST_PORT`, `SQLITE_PATH`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD`, `ADMIN_RECOVERY_KEY`, `TRUST_PROXY`, `MEMORY_LIMIT_MB`, serta opsional `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
+  - **Build-Time**: `VITE_WHATSAPP_ADMIN`, opsional `VITE_API_BASE_URL` *(hanya untuk Split-Deploy Vercel+VPS)*, dan file font berlisensi opsional di `public/fonts/` (`TimelessGrotesk*.woff2`) disisipkan saat **`npm run build` / `docker compose build`**. Jika diubah, wajib rebuild frontend.
+  - **Runtime**: `IMAGE_TAG`, `PORT`, `HOST_PORT`, `SQLITE_PATH`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD`, `ADMIN_RECOVERY_KEY`, `TRUST_PROXY`, `MEMORY_LIMIT_MB`, opsional `CORS_ALLOWED_ORIGINS` *(untuk Split-Deploy)*, serta opsional `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
 
 ---
 

@@ -1,3 +1,5 @@
+import { resolveApiUrl } from './apiSession';
+
 interface DetectedFontFile {
   url: string;
   weight: string;
@@ -13,7 +15,7 @@ export async function initBrandFonts(): Promise<void> {
   fontsInitialized = true;
 
   try {
-    const res = await fetch('/api/fonts/available', { cache: 'no-store' });
+    const res = await fetch(resolveApiUrl('/api/fonts/available'), { cache: 'no-store' });
     if (!res.ok) return;
     const data = (await res.json()) as { files?: DetectedFontFile[] };
     const files = Array.isArray(data.files) ? data.files : [];
@@ -23,7 +25,7 @@ export async function initBrandFonts(): Promise<void> {
       .map(
         (f) => `@font-face {
   font-family: 'Timeless Grotesk';
-  src: url('${f.url}') format('${f.format}');
+  src: url('${resolveApiUrl(f.url)}') format('${f.format}');
   font-weight: ${f.weight};
   font-style: normal;
   font-display: swap;

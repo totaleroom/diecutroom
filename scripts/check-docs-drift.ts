@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -46,6 +46,7 @@ Checks performed (zero node_modules required):
   3. SQLite Schema Drift : Scans CREATE TABLE & ensureUsersColumn in server.ts vs docs/STATUS.md & docs/04-DEVELOPER-ARCHITECTURE.md
   4. Runtime Env Drift   : Scans process.env.* in server.ts vs .env.example & docs/STATUS.md
   5. Scripts & Docker    : Scans package.json scripts vs docs/STATUS.md and verifies scripts/admin-reset.ts in Dockerfile
+  6. Codebase Index      : Verifies docs/CODEBASE_INDEX.md matches current code (run 'npm run index:build' to refresh)
 
 Options:
   --strict   Exit with code 1 if any FAIL drift is detected
@@ -301,6 +302,38 @@ function checkScriptsAndDockerParity(
   };
 }
 
+function checkCodebaseIndexFreshness(): DriftCheckResult {
+  const indexScript = path.join(ROOT, 'scripts', 'generate-codebase-index.ts');
+  if (!fs.existsSync(indexScript)) {
+    return {
+      name: '6. Codebase Index Parity',
+      status: 'WARN',
+      summary: 'scripts/generate-codebase-index.ts not found.',
+      details: [],
+    };
+  }
+  try {
+    execFileSync(process.execPath, [indexScript, '--check'], {
+      cwd: ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    return {
+      name: '6. Codebase Index Parity',
+      status: 'PASS',
+      summary: 'docs/CODEBASE_INDEX.md is synchronized with all source modules & API routes.',
+      details: [],
+    };
+  } catch {
+    return {
+      name: '6. Codebase Index Parity',
+      status: 'FAIL',
+      summary: 'docs/CODEBASE_INDEX.md is stale or missing.',
+      details: ["Run 'npm run index:build' to regenerate docs/CODEBASE_INDEX.md."],
+    };
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -338,6 +371,7 @@ function main() {
     checkSchemaDrift(serverSrc!, statusDoc!, archDoc!),
     checkEnvVarDrift(serverSrc!, envExample!, statusDoc!),
     checkScriptsAndDockerParity(pkgRaw!, statusDoc!, dockerfile),
+    checkCodebaseIndexFreshness(),
   ];
 
   console.log('=== DieCut.Room Documentation Drift Report ===');

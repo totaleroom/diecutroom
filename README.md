@@ -313,25 +313,31 @@ cp .env.example .env
 npm run dev
 ```
 
-Verify types, production build, and documentation parity:
+Verify types, production build, codebase index, and documentation parity:
 ```bash
-npm run lint                  # tsc --noEmit
-npm run build                 # Vite + Workbox PWA bundle -> ./dist
-npm run docs:check -- --strict # Zero-dependency Node 22+ docs drift audit
+npm run lint                   # tsc --noEmit
+npm run build                  # Vite + Workbox PWA bundle -> ./dist
+npm run index:build            # Regenerate docs/CODEBASE_INDEX.md (zero-dep)
+npm run docs:check -- --strict # Zero-dependency Node 22+ docs & index drift audit
 npm run admin:reset -- --help  # Emergency Admin password / recovery key CLI
 ```
 
+### Multi-App Ecosystem (Astro Landing Hub → DieCut.Room Subdomain)
+When linking **DieCut.Room** from a main **Astro** landing page (`https://totaleroom.com`), deploy it on its own subdomain (`https://diecut.totaleroom.com`) rather than a subpath (`/diecut`) so PWA Service Workers, cookies, and releases stay cleanly isolated:
+- **Path A — Monolith VPS (Recommended, zero AI credits)**: Run `Dockerfile` Slim (`~160 MB`) or PM2 on your Debian VPS behind Nginx TLS (`VITE_API_BASE_URL` empty, same-origin).
+- **Path B — Split Deploy (Optional Vercel Frontend + VPS Backend)**: Deploy the Vite SPA to Vercel (`vercel.json`) with `VITE_API_BASE_URL=https://api-diecut.totaleroom.com`, and set `CORS_ALLOWED_ORIGINS=https://diecut.totaleroom.com` on your Debian VPS `server.ts`.
+
 ### Debian VPS Production Deployment (Summary)
-1. **DNS**: Point an `A` record for your subdomain (e.g., `cad.yourdomain.com`) to your Debian VPS public IPv4.
+1. **DNS**: Point an `A` record for your subdomain (e.g., `diecut.totaleroom.com`) to your Debian VPS public IPv4.
 2. **Audit Existing VPS Services & Disk/RAM**: Check free disk/RAM (`df -h / && free -m`), occupied ports (`ss -tulpn`), and active Nginx sites (`/etc/nginx/sites-enabled/`) so existing apps/containers remain untouched.
 3. **Configure `.env`**: Clone repo to `/opt/diecut-room`, create `.env` using Option A or B (`chmod 600 .env`), and ensure `data/` exists (`chmod 700 data`).
 4. **Boot Runtime**:
    - **Docker Slim (Recommended when free disk ≥ 3 GB)**: `docker compose build --no-cache && docker compose up -d && docker builder prune -f`
    - **Node 22 + PM2 (Minimal disk)**: `npm ci --include=dev && npm run lint && npm run build && npm prune --omit=dev && NODE_ENV=production pm2 start server.ts --name diecut-room --interpreter node --max-memory-restart 220M`
-5. **Debian Nginx (`sites-available`) + Certbot HTTPS**: Add `/etc/nginx/sites-available/diecut-room` from [`deploy/nginx-diecut.conf`](./deploy/nginx-diecut.conf), symlink to `sites-enabled/`, run `sudo nginx -t && sudo systemctl reload nginx`, and issue TLS via `sudo certbot --nginx -d cad.yourdomain.com`.
+5. **Debian Nginx (`sites-available`) + Certbot HTTPS**: Add `/etc/nginx/sites-available/diecut-room` from [`deploy/nginx-diecut.conf`](./deploy/nginx-diecut.conf), symlink to `sites-enabled/`, run `sudo nginx -t && sudo systemctl reload nginx`, and issue TLS via `sudo certbot --nginx -d diecut.totaleroom.com`.
 
-> **Opening this repo with an AI Coding Agent (ADE / Antigravity / Codex / Claude) or VPS Ops Agent?**  
-> Start with [`docs/STATUS.md`](./docs/STATUS.md) + `npm run docs:check`, and follow [`AGENTS.md`](./AGENTS.md) / [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md).
+> **Opening this repo with an AI Coding Agent (ADE / Antigravity / Cursor / Codex / Claude / Vercel / Lovable)?**  
+> Read [`DESIGN.md`](./DESIGN.md), [`docs/STATUS.md`](./docs/STATUS.md), and [`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md) first to save tokens/credits and preserve exact visual fidelity.
 
 ---
 
@@ -351,8 +357,10 @@ Detailed operational guides, engineering derivations, API contracts, and runbook
 
 | Document | Scope |
 | :--- | :--- |
+| **[`DESIGN.md`](./DESIGN.md)** | **Product Visual Contract**: Exact Precision Tactile Studio color tokens, typography, radii, Halftone Offset-Sheet Auth portal, 4-tier responsive rules, and PDF branding for all AI builders. |
 | **[`docs/STATUS.md`](./docs/STATUS.md)** | **Certified Single Source of Truth**: `verified_at_commit`, Capability Ledger (`IMPLEMENTED` vs `NOT PRESENT`), entrypoint map, visual design anchor, 5-table SQLite & env summary, and Known Gaps. |
-| **[`AGENTS.md`](./AGENTS.md)** | Universal AI Agent & Debian VPS contract: First-Scan protocol, Truth Order, Precision Tactile Studio anchor, multi-app VPS coexistence rules, runtime decision matrix, stop-gates, and Go-Live proof. |
+| **[`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md)** | **Auto-Generated Credit-Saver Index**: Deterministic map of all modules, exported symbols, large-file line anchors, and all 43 Express `/api/*` route line numbers (`npm run index:build`). |
+| **[`AGENTS.md`](./AGENTS.md)** | Universal AI Agent & Debian VPS contract: First-Scan protocol, Truth Order, cross-builder credit-saving rules, Astro Hub subdomain topology, multi-app VPS coexistence rules, and Go-Live proof. |
 | **[`docs/01-USER-GUIDE.md`](./docs/01-USER-GUIDE.md)** | End-to-end User & Admin handbook: Halftone Login Gate, WhatsApp metadata, Admin Console, 2D FEFCO CAD, 13 SRP presets, 3D Fit & Tear simulator, Palletizer Pro 3D, Responsive Focus Mode/Landscape HUD, SVG/PDF export, and BCT Pro. |
 | **[`docs/02-ENGINEERING-FORMULAS.md`](./docs/02-ENGINEERING-FORMULAS.md)** | Paper grade catalog (up to K300/White Top/Semi-Chem), TUF tables, TAPPI/ISO vs. BCT Pro ECT & McKee equations, panel ink crush math, 8 Pre-Flight rules, Palletizer case-pack/stability physics, and costing formulas. |
 | **[`docs/03-VPS-SUBDOMAIN-DEPLOYMENT.md`](./docs/03-VPS-SUBDOMAIN-DEPLOYMENT.md)** | Manual Debian VPS setup: DNS `A` record, Docker Compose vs. PM2 (`npm ci --include=dev`), Debian Nginx `sites-available` + Certbot SSL, UFW firewall, PWA install, custom font drop-in, and SQLite backups (`sqlite3` & Node `VACUUM INTO`). |

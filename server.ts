@@ -2060,8 +2060,28 @@ async function startServer() {
 
   app.use(express.json({ limit: '2mb' }));
 
+  // Optional strict CORS allowlist for Split-Deploy (e.g., Vercel frontend + Debian VPS API)
+  const corsAllowedOrigins = new Set(
+    (process.env.CORS_ALLOWED_ORIGINS || '')
+      .split(',')
+      .map((s) => s.trim().replace(/\/+$/, ''))
+      .filter((s) => /^https?:\/\/[^*\s]+$/i.test(s))
+  );
+
   // Prevent browser, reverse proxy, or Service Worker caching on dynamic auth/admin/user APIs
-  app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const reqOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim().replace(/\/+$/, '') : '';
+    if (reqOrigin && corsAllowedOrigins.has(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Agent-Key');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      if (req.method === 'OPTIONS') {
+        res.status(204).end();
+        return;
+      }
+    }
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

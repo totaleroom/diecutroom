@@ -6,7 +6,7 @@ import InteractiveMatrixCanvas from './InteractiveMatrixCanvas';
 import { HalftonePerimeterFrame, TopRightSheetHalftone } from './HalftoneSheetDecor';
 import WhatsAppContactButton from './WhatsAppContactButton';
 import { TactileButton, TactileInputWell, TactileSegmented } from './tactile/TactileUI';
-import { setClientSessionToken } from '../utils/apiSession';
+import { resolveApiUrl, setClientSessionToken } from '../utils/apiSession';
 
 interface AuthGateProps {
   initialStatusNotice?: {
@@ -95,7 +95,7 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
     if (view !== 'admin-recover') return;
     let active = true;
     setRecoveryOptionsLoading(true);
-    fetch('/api/auth/recovery-options', { credentials: 'include' })
+    fetch(resolveApiUrl('/api/auth/recovery-options'), { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!active || !data) return;
@@ -135,7 +135,7 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
     }
     setRequestingOtp(true);
     try {
-      const res = await fetch('/api/auth/admin-recover/request-otp', {
+      const res = await fetch(resolveApiUrl('/api/auth/admin-recover/request-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -180,7 +180,7 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
       }
       setSubmitting(true);
       try {
-        const res = await fetch('/api/auth/admin-recover/verify-otp', {
+        const res = await fetch(resolveApiUrl('/api/auth/admin-recover/verify-otp'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -211,7 +211,7 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/auth/admin-recover', {
+      const res = await fetch(resolveApiUrl('/api/auth/admin-recover'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -251,7 +251,7 @@ export default function AuthGate({ initialStatusNotice, onAuthenticated }: AuthG
           ? { email, password, clientMeta: accessMeta }
           : { name, email, company, password, clientMeta: accessMeta };
 
-      const res = await fetch(endpoint, {
+      const res = await fetch(resolveApiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
