@@ -1,27 +1,49 @@
-# AGENTS.md — Instruksi Operasional untuk AI Agent di VPS (Debian Multi-App Ready)
+# AGENTS.md — Kontrak Universal AI Agent & Operasional VPS Debian
 
-Dokumen ini adalah kontrak kerja wajib bagi AI Agent mana pun yang menarik (*pull*) repositori **DieCut.Room** di server **VPS Debian** (atau distribusi Linux kompatibel) untuk melakukan audit awal, setup produksi, migrasi, atau pembaruan aplikasi (*update*).
+Dokumen ini adalah kontrak kerja wajib bagi setiap **AI Agent** — baik **Coding Agent** (ADE, Antigravity, Codex, Claude Code, Cursor) maupun **VPS Operations Agent** di server **VPS Debian** — saat membuka, mengaudit, mengembangkan, atau mendeploy repositori **DieCut.Room**.
 
-> **Runbook Langkah-demi-Langkah & Checklist Lengkap:**  
-> Baca dan eksekusi secara berurutan dokumen [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md) sebelum menjalankan perintah perubahan sistem apa pun.
+---
+
+## 0. First-Scan Protocol, Truth Order & Visual Design Anchor (Untuk Coding Agent)
+
+1. **Truth Order (Urutan Kebenaran)**:
+   `Kode aktual di HEAD` → `git diff <verified_at_commit>..HEAD` → [`docs/STATUS.md`](./docs/STATUS.md) → `AGENTS.md` → `docs/01`–`08` & `README.md`.
+2. **Automatic First-Scan (< 5 detik, tanpa butuh `node_modules`)**:
+   - Baca [`docs/STATUS.md`](./docs/STATUS.md) untuk melihat *Capability Ledger*, peta modul, skema SQLite 5 tabel, dan *Known Gaps*.
+   - Jalankan `node scripts/check-docs-drift.ts` (`npm run docs:check`) untuk mendeteksi apakah ada route `/api/*`, tabel/kolom SQLite, variabel env, atau skrip baru yang lebih mutakhir daripada dokumentasi.
+3. **Visual Design Fidelity Anchor**:
+   - Wajib ikuti [`.agents/skills/tactile-design/SKILL.md`](./.agents/skills/tactile-design/SKILL.md) serta aturan [`.agents/rules/project.md`](./.agents/rules/project.md).
+   - Pertahankan token warna **Precision Tactile Studio** pada `src/index.css` (`#17191F`, `#474D58`, `#5C626E`, `#CDD2DB`, `#ECEEF1`, `#F4F5F7`, `#4F46E5`) dan primitif di `src/components/tactile/TactileUI.tsx` (juga menjadi acuan warna Laporan PDF Palletizer A4 2 Halaman).
+   - Logo resmi produksi **Totale.Room** tersimpan di `public/assets/aistudio/Asset_2_5ca58983.svg`. Lampiran PNG/PDF lain di `public/assets/aistudio/` hanyalah artefak referensi diskusi, bukan aset UI produksi.
+4. **Platform & Post-Commit Hygiene**:
+   - Biarkan `metadata.json` utuh (digunakan oleh runtime Google AI Studio).
+   - `automated_tests: NOT PRESENT` (tidak ada skrip `test` di `package.json`). Verifikasi menggunakan `npm run lint`, `npm run build`, dan `npm run docs:check -- --strict`.
+   - Setiap commit yang mengubah route `/api/*`, skema SQLite, variabel env, skrip npm, atau fitur utama wajib memperbarui [`docs/STATUS.md`](./docs/STATUS.md) dan lulus `npm run docs:check -- --strict`.
+
+> **Runbook Deploy VPS Debian Langkah-demi-Langkah:**  
+> Baca dan eksekusi secara berurutan dokumen [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md) sebelum menjalankan perintah perubahan sistem VPS apa pun.
 
 ---
 
 ## 1. Gambaran Sistem & Footprint Resource
 
-- **Stack Aplikasi**: Full-stack monolith ringan — Frontend **React 19 + Vite + Three.js + Web Worker + PWA (`vite-plugin-pwa`)** dikompilasi ke `./dist/`, lalu dilayani oleh server **Express (`server.ts`)** di atas **Node.js v22+**.
-- **Database & Auth**: **Embedded SQLite** bawaan Node.js v22 (`node:sqlite`, mode WAL) tanpa server database eksternal dan tanpa kompilasi native C++. Auth memakai *HTTP-only cookie* bertanda HMAC-SHA256 + `scrypt`.
+- **Stack Aplikasi**: Full-stack monolith ringan — Frontend **React 19 + Vite + Tailwind v4 + Three.js + Web Worker + jsPDF (Laporan Palletizer A4 Orthographic) + PWA (`vite-plugin-pwa`)** dikompilasi ke `./dist/`, lalu dilayani oleh server **Express (`server.ts`)** di atas **Node.js v22+**.
+- **Database & Auth**: **Embedded SQLite** bawaan Node.js v22 (`node:sqlite`, mode WAL, 5 tabel: `users`, `bct_history`, `saved_projects`, `system_meta`, `audit_logs`) tanpa server database eksternal dan tanpa kompilasi native C++. Auth memakai dual **HTTP-only `Partitioned` cookie + `Authorization: Bearer <token>`** bertanda HMAC-SHA256 + `scrypt`, dilengkapi Admin Recovery Key, SMTP Email OTP, serta `X-Agent-Key` untuk Hermes Agent REST (`/api/agent/*`) dan MCP (`/api/mcp`).
 - **Footprint Produksi Aktual** *(Dioptimalkan untuk VPS terbatas disk/RAM)*:
-  - **Docker Multi-Stage Slim (`Dockerfile`)**: Stage 1 mem-build bundel `./dist`, Stage 2 hanya memasang `express` + `dotenv` di atas `node:22-alpine`. Ukuran image akhir **~160 MB**, batas memori container **`mem_limit: 256m`** (`NODE_OPTIONS=--max-old-space-size=192`), pemakaian RAM runtime **~65–110 MB RSS**.
+  - **Docker Multi-Stage Slim (`Dockerfile`)**: Stage 1 mem-build bundel `./dist`, Stage 2 hanya memasang `express` + `dotenv` di atas `node:22-alpine` dan menyertakan `scripts/admin-reset.ts`. Ukuran image akhir **~160 MB**, batas memori container **`mem_limit: 256m`** (`NODE_OPTIONS=--max-old-space-size=192`), pemakaian RAM runtime **~65–110 MB RSS**.
   - **PM2 Host Sidecar (Node v22+)**: Pemakaian RAM **~60–95 MB RSS** (`--max-memory-restart 220M`), tanpa overhead lapisan image/cache Docker (ideal bila sisa disk sangat sempit `< 3 GB`).
 - **Skrip Utama (`package.json`)**:
-  - `npm ci --include=dev` → wajib dipakai jika `NODE_ENV=production` sudah terset di shell/env agar `vite`, `typescript`, dan `@tailwindcss/vite` ikut terpasang saat build.
+  - `npm ci --include=dev` *(atau `npm install --include=dev --no-audit --no-fund` jika lockfile lintas-platform gagal di sandbox)* → wajib dipakai bila `NODE_ENV=production` sudah terset agar `vite`, `typescript`, dan `@tailwindcss/vite` ikut terpasang saat build.
+  - `npm run dev` → menjalankan Express + Vite dev middleware (`tsx server.ts`).
   - `npm run lint` → menjalankan `tsc --noEmit` (wajib lulus sebelum start produksi).
   - `npm run build` → mem-build frontend + Service Worker PWA ke `./dist/`.
   - `NODE_ENV=production npm start` → menjalankan `node server.ts` (native TypeScript type-stripping Node v22+, tidak butuh transpilasi terpisah).
+  - `npm run admin:reset` → utilitas CLI pemulihan darurat Admin (`node scripts/admin-reset.ts`).
+  - `npm run docs:check` → detektor drift dokumentasi zero-dependency (`node scripts/check-docs-drift.ts`, tambahkan `-- --strict` untuk mode ketat).
+  - `Test`: **NOT PRESENT** (tidak ada skrip `npm test`).
 - **Variabel Build-Time vs Runtime**:
-  - `VITE_WHATSAPP_ADMIN` dan file font berlisensi opsional di `public/fonts/` (`TimelessGrotesk*.woff2`) disisipkan saat **`npm run build` / `docker compose build`**. Jika diubah, wajib rebuild frontend.
-  - `IMAGE_TAG`, `PORT`, `HOST_PORT`, `SQLITE_PATH`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD`, `TRUST_PROXY` dibaca saat deploy/runtime server.
+  - **Build-Time**: `VITE_WHATSAPP_ADMIN` dan file font berlisensi opsional di `public/fonts/` (`TimelessGrotesk*.woff2`) disisipkan saat **`npm run build` / `docker compose build`**. Jika diubah, wajib rebuild frontend.
+  - **Runtime**: `IMAGE_TAG`, `PORT`, `HOST_PORT`, `SQLITE_PATH`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD`, `ADMIN_RECOVERY_KEY`, `TRUST_PROXY`, `MEMORY_LIMIT_MB`, serta opsional `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
 
 ---
 

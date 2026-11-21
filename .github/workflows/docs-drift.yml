@@ -1,0 +1,30 @@
+name: Docs Drift Audit (Warning-Only)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docs-drift:
+    name: Zero-Install Docs Drift Check
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22 (zero npm install)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run zero-dependency docs drift audit
+        run: |
+          if ! node scripts/check-docs-drift.ts --strict; then
+            echo "::warning title=Documentation Drift Detected::Code changes drifted from docs/STATUS.md, docs/06-API-REFERENCE.md, docs/04-DEVELOPER-ARCHITECTURE.md, or .env.example. Run 'npm run docs:check' locally to inspect."
+            exit 1
+          fi

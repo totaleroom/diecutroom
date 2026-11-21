@@ -1,0 +1,3 @@
+{
+  "install": "npm install --include=dev --no-audit --no-fund"
+}

@@ -33,14 +33,15 @@
 
 | Domain | Capabilities |
 | :--- | :--- |
-| **Halftone Auth Portal & Admin Console** | Sharp-cornered matte offset-sheet login portal (`2px` radius) framed by perimeter halftone dots and static top-right raster gradient over an interactive dark matrix canvas. Self-registration starts in `pending` state until approved by Admin. Includes an in-app **Admin Users Console** to activate/disable accounts, inspect origin/device/IP metadata, override passwords directly, and permanently delete users (`ON DELETE CASCADE`). |
-| **WhatsApp Verification + Metadata** | No self-service password reset. Login, Pending, and Disabled screens expose a **WhatsApp Admin CTA** (`+6282125086328`) pre-filled with origin subdomain, full URL, referrer, OS/browser summary, display mode (`Standalone PWA` vs `Web Browser`), screen size, and timezone. |
-| **2D Dieline CAD (FEFCO 0200–0204)** | Generates true-scale **1:1 mm** vector dielines for `0201 (RSC)`, `0200 (HSC)`, `0202 (OSC)`, `0203 (FOL)`, and `0204 (CSSC)` with `Product Fit` anti-headspace presets, pre-press layers (*Bleed*, *Score Safe Zone*, *Glue Knockout*, *Flute Grain*), and GS1 **ITF-14** barcode with Modulo-10 auto-fix. |
+| **Halftone Auth Portal, Recovery & 4-Tab Admin Console** | Sharp-cornered matte offset-sheet login portal (`2px` radius) framed by perimeter halftone dots over an interactive dark matrix canvas. Uses dual **HttpOnly `Partitioned` Cookie + `Authorization: Bearer`** HMAC-SHA256 sessions with brute-force lockout (`failed_login_count`, `locked_until`), session revocation (`token_version`), hidden **Admin Recovery Key**, **SMTP Email OTP**, and CLI emergency reset (`npm run admin:reset`). Includes a **4-tab Admin Console** (**Users & Bulk Approve**, **Health Radar**, **Audit Logs**, and **Security / SMTP / Agent Key / SQLite & JSON Backups**). |
+| **WhatsApp Verification + Metadata** | Login, Pending, and Disabled screens expose a **WhatsApp Admin CTA** (`+6282125086328`) pre-filled with origin subdomain, full URL, referrer, OS/browser summary, display mode (`Standalone PWA` vs `Web Browser`), screen size, and timezone. |
+| **2D Dieline CAD (FEFCO 0200–0204)** | Generates true-scale **1:1 mm** vector dielines for `0201 (RSC)`, `0200 (HSC)`, `0202 (OSC)`, `0203 (FOL)`, and `0204 (CSSC)` with `mm` / `cm` / `in` 3-unit workspace, `Product Fit` anti-headspace presets, pre-press layers (*Bleed*, *Score Safe Zone*, *Glue Knockout*, *Flute Grain*), and GS1 **ITF-14** barcode with Modulo-10 auto-fix. |
 | **13 SRP Patterns & Dash/Non-Dash Rules** | Includes 13 retail & logistics patterns (*Angled Hood*, *Drop-Front PDQ*, *Twin-Zipper*, *Split-Tray*, *Stepped Shelf-Tray + U-Scoop*, *Tear Strip*, *Carry Handles*, etc.) with **Solid Cut (Non-Dash)** vs **Perforation Rules** (`6/3`, `5/3`, `4/4 mm`, or custom `cut/tie`). |
 | **3D Fit & Interactive SRP Tear Simulation** | Real-time Three.js WebGL simulator with `0–100%` box folding, X-Ray cavity clearance, top-right **POV Camera Capsule** (`Iso / Front / Top / Side`), top-left **SRP & Cavity Clearance HUD**, and `0–100%` interactive **Tear / Open SRP** opening animation. |
-| **Palletizer Pro 3D & Smart Advisor** | Interactive 3D pallet stacking simulator (`ISO`, `EUR`, `US`, `Custom`) with **Case-Pack Solver**, pattern evaluation (*Interlock*, *Column*, *Pinwheel*, *Split*, *Hybrid*), friction/humidity load-retention physics, **Perfectionist Size Tuning**, and non-blocking **Web Worker** off-thread optimization. |
+| **Palletizer Pro 3D & 2-Page A4 Orthographic PDF Report** | Interactive 3D pallet stacking simulator (`ISO`, `EUR`, `US`, `Custom`) with **Case-Pack Solver**, pattern evaluation (*Interlock*, *Column*, *Pinwheel*, *Split*, *Hybrid*), friction/humidity load-retention physics, **Perfectionist Size Tuning**, non-blocking **Web Worker** optimization, and **2-Page A4 Engineering PDF Export** featuring **4 Orthographic POVs** (`Iso` ~40° steep pitch, `Top`, `Front`, `Side`), TOPS-style `0°/90°` orientation contrast colors, vector `L × W × T` dimension overlays, dedicated **Heat-Map Iso/Top** panel, numbered 2D Layer 1 & Layer 2 operator guides, and **DieCut.Room / Totale.Room** Precision Tactile Studio branding. |
 | **BCT Pro & TAPPI/ISO Audit Engine** | Single-Wall (`F/E/B/C/A`) and Double-Wall (`EB/BC/AB/AA`) compositions up to **K300**, **White Top Kraft**, **Testliner**, and **Semi-Chem** fluting; custom RCT overrides; per-panel ink **Print Coverage Simulator**; environmental derating; side-by-side **TAPPI vs. BCT Pro** comparison; 8 Pre-Flight rules with 1-click Auto-Fix; and batch costing. |
-| **Multi-Viewport Ergonomics & Auto-Adaptive GPU** | 4-tier responsive workspace (`desktop ≥1280px`, `compact 1024–1279px`, `tablet 768–1023px`, `mobile <768px`) with auto-minimize panels, header close buttons, edge quick handles, **1-Click Focus Mode (`F`/`Esc`)**, Mobile Floating Thumb Dock, **Short-Landscape Floating HUD** (`height ≤ 500px`), `64px` compact sliders, lazy-loaded heavy views, and automatic GPU/CPU quality tiers (`ultra / balanced / eco / software`) with dynamic pixel-ratio scaling. |
+| **Hermes Agent REST API & MCP Server** | Built-in AI Agent integration via `X-Agent-Key` / Bearer key supporting `/api/agent/skill`, `/api/agent/connect`, `/api/agent/calculate`, `/api/agent/dieline` (2D SVG / Clean CAD generation with signed `/api/agent/dieline/download`), and JSON-RPC **MCP** at `/api/mcp`. |
+| **Multi-Viewport Ergonomics & Auto-Adaptive GPU** | 4-tier responsive workspace (`desktop ≥1280px`, `compact 1024–1279px`, `tablet 768–1023px`, `mobile <768px`) with auto-minimize panels, header close buttons, edge quick handles, **1-Click Focus Mode (`F`/`Esc`)**, Mobile Floating Thumb Dock, **Short-Landscape Floating HUD** (`height ≤ 500px`), `64px` compact sliders, lazy-loaded heavy views with chunk-error recovery (`lazyWithRetry.ts`), and automatic GPU/CPU quality tiers (`ultra / balanced / eco / software`) with dynamic pixel-ratio scaling. |
 | **Cross-Device Sync & Resilient PWA** | Saved dieline projects (`/api/projects`) and BCT snapshots (`/api/history`) sync per account in VPS SQLite (`data/diecut.db`) with Workbox `NetworkFirst` navigation, strict `/api/*` `NetworkOnly` isolation, self-healing boot watchdog, and optional runtime **Timeless Grotesk** font discovery (`/api/fonts/available`). |
 
 ---
@@ -85,18 +86,17 @@ flowchart TD
 
 | Layer | File | Responsibility |
 | :--- | :--- | :--- |
-| **Backend Server** | [`server.ts`](./server.ts) | Express + `http.createServer`, SQLite WAL bootstrap & initial Admin seeding, `scrypt` password hashing, HMAC-SHA256 cookie auth, Admin & sync endpoints, `/api/fonts/available` scanner, Vite dev middleware, and hardened production `dist/` static server. |
+| **Backend Server** | [`server.ts`](./server.ts) | Express + `http.createServer`, 5-table SQLite WAL bootstrap & initial Admin seeding, `scrypt` hashing, dual `Partitioned` Cookie + Bearer auth, Admin Recovery Key + SMTP OTP, 4-tab Admin & backup endpoints, Hermes Agent REST (`/api/agent/*`), MCP (`/api/mcp`), `/api/fonts/available`, Vite dev middleware, and hardened production `dist/` static server. |
 | **Domain Contracts** | [`src/types.ts`](./src/types.ts) | Canonical TypeScript interfaces for `BoxConfig`, FEFCO dimensions, 13 `PerforationOption` presets, `KRAFT/WHITE_TOP/TESTLINER/MEDIUM` specs, Palletizer types, `EngineeringAnalysis`, `AuthUser`, and `SavedBoxProject`. |
-| **App Orchestrator** | [`src/App.tsx`](./src/App.tsx) | Session bootstrap (`/api/auth/me`), `AuthGate` guard, lazy-loaded 3D/Palletizer/Modal routes, dual-unit workspace state (`mm`/`in`), adaptive header + overflow menu, Mobile Thumb Dock, Focus Mode banner, and pre-flight drawer. |
+| **App Orchestrator** | [`src/App.tsx`](./src/App.tsx) | Session bootstrap (`/api/auth/me` via `src/utils/apiSession.ts`), `AuthGate` guard, resilient lazy-loaded routes (`src/utils/lazyWithRetry.ts`), 3-unit workspace state (`mm`/`cm`/`in`), adaptive header + overflow menu, Mobile Thumb Dock, Focus Mode banner, and pre-flight drawer. |
 | **Responsive Layout Hook** | [`src/hooks/useWorkspaceLayout.ts`](./src/hooks/useWorkspaceLayout.ts) | 4-tier responsive breakpoint detection (`desktop/compact/tablet/mobile`), `isShortLandscape` detection (`height ≤ 500 && width ≥ 560`), auto-minimize transitions, overlay mutual exclusion, and `F`/`Esc` shortcuts. |
-| **Adaptive GPU Engine & Fonts** | [`src/utils/browserEngine.ts`](./src/utils/browserEngine.ts)<br/>[`src/utils/fontLoader.ts`](./src/utils/fontLoader.ts) | WebGL/CPU tier profiler (`ultra/balanced/eco/software`), dynamic DPR frame-cost controller, idle scheduler, and zero-404 runtime loader for licensed `Timeless Grotesk` `.woff2` files. |
+| **Session, GPU & Fonts** | [`src/utils/apiSession.ts`](./src/utils/apiSession.ts)<br/>[`src/utils/lazyWithRetry.ts`](./src/utils/lazyWithRetry.ts)<br/>[`src/utils/browserEngine.ts`](./src/utils/browserEngine.ts)<br/>[`src/utils/fontLoader.ts`](./src/utils/fontLoader.ts) | Dual cookie/Bearer `authFetch` session helper, stale-chunk retry recovery, WebGL/CPU tier profiler (`ultra/balanced/eco/software`), dynamic DPR controller, and zero-404 runtime loader for licensed `Timeless Grotesk` `.woff2` files. |
 | **2D Geometry Engine** | [`src/utils/dieline.ts`](./src/utils/dieline.ts) | Parametric CAD generator (`generateRSCDieline`) computing cut, crease, perforation, perforation-fold, bleed, score safe zone, glue knockout polygon, flute grain indicator, product fit rectangles, and GS1 ITF-14 coordinates. |
-| **Engineering & Palletizer** | [`src/utils/engineering.ts`](./src/utils/engineering.ts)<br/>[`src/utils/palletizer.ts`](./src/utils/palletizer.ts)<br/>[`src/workers/palletizer.worker.ts`](./src/workers/palletizer.worker.ts) | Dual-engine BCT calculator (`TAPPI / ISO Calibrated` vs `BCT Pro Legacy`), panel ink crush, 8 Pre-Flight rules, blank waste/costing, Case-Pack solver, pallet physics optimization, and off-thread Web Worker advisor. |
-| **2D CAD & 3D Simulators** | [`src/components/BoxPreview.tsx`](./src/components/BoxPreview.tsx)<br/>[`src/components/Box3DViewer.tsx`](./src/components/Box3DViewer.tsx)<br/>[`src/components/PalletizerWorkspace.tsx`](./src/components/PalletizerWorkspace.tsx) | Interactive zoom/pan SVG viewport + `1:1 mm` SVG/PDF export, Three.js Box Fit & `0–100%` SRP Tear viewer (top-right POV capsule + compact `64px` sliders + short-landscape floating bar), and interactive 3D Palletizer workspace. |
+| **Engineering, Palletizer & PDF Report** | [`src/utils/engineering.ts`](./src/utils/engineering.ts)<br/>[`src/utils/palletizer.ts`](./src/utils/palletizer.ts)<br/>[`src/workers/palletizer.worker.ts`](./src/workers/palletizer.worker.ts)<br/>[`src/utils/palletizerReportPdf.ts`](./src/utils/palletizerReportPdf.ts) | Dual-engine BCT calculator (`TAPPI / ISO Calibrated` vs `BCT Pro Legacy`), panel ink crush, 8 Pre-Flight rules, blank waste/costing, Case-Pack solver, pallet physics optimization, off-thread Web Worker advisor, and 2-page A4 Orthographic Palletizer PDF report generator. |
+| **2D CAD & 3D Simulators** | [`src/components/BoxPreview.tsx`](./src/components/BoxPreview.tsx)<br/>[`src/components/Box3DViewer.tsx`](./src/components/Box3DViewer.tsx)<br/>[`src/components/PalletizerWorkspace.tsx`](./src/components/PalletizerWorkspace.tsx) | Interactive zoom/pan SVG viewport + `1:1 mm` SVG/PDF export, Three.js Box Fit & `0–100%` SRP Tear viewer (top-right POV capsule + compact `64px` sliders + short-landscape floating bar), and interactive 3D Palletizer workspace with Orthographic PDF capture. |
 | **Config & Inspection UI** | [`src/components/Sidebar.tsx`](./src/components/Sidebar.tsx)<br/>[`src/components/BCTInspectorRail.tsx`](./src/components/BCTInspectorRail.tsx)<br/>[`src/components/EngineeringSheet.tsx`](./src/components/EngineeringSheet.tsx) | Collapsible left structural/pre-press/SRP configurator, right BCT inspector (`Calc`, `Audit`, `History`, `Compare`), and 8-rule Pre-Flight audit modal with 1-click Auto-Fix. |
-| **Auth, Halftone & Sync UI** | [`src/components/AuthGate.tsx`](./src/components/AuthGate.tsx)<br/>[`src/components/HalftoneSheetDecor.tsx`](./src/components/HalftoneSheetDecor.tsx)<br/>[`src/components/InteractiveMatrixCanvas.tsx`](./src/components/InteractiveMatrixCanvas.tsx)<br/>[`src/components/AdminUsersModal.tsx`](./src/components/AdminUsersModal.tsx)<br/>[`src/components/ProjectsModal.tsx`](./src/components/ProjectsModal.tsx) | Halftone offset-sheet Login/Register/Pending/Disabled portal over interactive dot matrix canvas, Admin console, and per-account saved projects manager. |
-| **WhatsApp, PWA & Design System** | [`src/utils/whatsapp.ts`](./src/utils/whatsapp.ts)<br/>[`src/components/WhatsAppContactButton.tsx`](./src/components/WhatsAppContactButton.tsx)<br/>[`src/components/PWAInstallControl.tsx`](./src/components/PWAInstallControl.tsx)<br/>[`src/components/tactile/TactileUI.tsx`](./src/components/tactile/TactileUI.tsx) | Origin/device/PWA metadata collector, `wa.me` deep-link builder, PWA install prompt (`beforeinstallprompt` + iOS sheet), offline badge, and light-mode tactile UI primitives. |
-| **Deployment Config** | [`Dockerfile`](./Dockerfile), [`docker-compose.yml`](./docker-compose.yml), [`deploy/nginx-diecut.conf`](./deploy/nginx-diecut.conf) | Multi-runtime Docker build (`HOST_PORT` + `VITE_WHATSAPP_ADMIN` + `HEALTHCHECK`) and Debian Nginx TLS/PWA/auth-hardening virtual-host template. |
+| **Auth, Halftone & Admin UI** | [`src/components/AuthGate.tsx`](./src/components/AuthGate.tsx)<br/>[`src/components/HalftoneSheetDecor.tsx`](./src/components/HalftoneSheetDecor.tsx)<br/>[`src/components/InteractiveMatrixCanvas.tsx`](./src/components/InteractiveMatrixCanvas.tsx)<br/>[`src/components/AdminUsersModal.tsx`](./src/components/AdminUsersModal.tsx)<br/>[`src/components/ProjectsModal.tsx`](./src/components/ProjectsModal.tsx) | Halftone offset-sheet Login/Register/Pending/Disabled + hidden Recovery Key/OTP portal over interactive dot matrix canvas, 4-tab Admin Console, and per-account saved projects manager. |
+| **CLI, Drift Guard & Deploy** | [`scripts/admin-reset.ts`](./scripts/admin-reset.ts)<br/>[`scripts/check-docs-drift.ts`](./scripts/check-docs-drift.ts)<br/>[`Dockerfile`](./Dockerfile), [`docker-compose.yml`](./docker-compose.yml), [`deploy/nginx-diecut.conf`](./deploy/nginx-diecut.conf) | Node 22+ emergency admin reset CLI, zero-dependency documentation drift detector (`npm run docs:check`), multi-stage Docker Slim build (`~160 MB`), and Debian Nginx TLS/PWA virtual-host template. |
 
 ---
 
@@ -189,6 +189,9 @@ erDiagram
         string password_hash "16B salt hex : 64B scrypt hex"
         string role "admin | user"
         string status "pending | active | disabled"
+        int token_version "Session revocation counter"
+        int failed_login_count "Brute-force counter"
+        string locked_until "ISO 8601 nullable lockout"
         string access_origin "Subdomain / origin URL"
         string access_path "Path + query string"
         string access_referrer
@@ -215,6 +218,24 @@ erDiagram
         string dims_summary "LxWxD mm"
         string config_json "Serialized BoxConfig"
         string updated_at "ISO 8601"
+    }
+
+    SYSTEM_META {
+        string key PK "Config key (recovery/smtp/agent_key)"
+        string value "Serialized value or hash"
+        string updated_at "ISO 8601"
+    }
+
+    AUDIT_LOGS {
+        string id PK "UUID v4"
+        string event_type "Auth/Admin/Security event"
+        string severity "info | warn | critical"
+        string actor_email "Initiating account"
+        string target_email "Affected account"
+        string detail "Structured description"
+        string ip_address "Client IP"
+        string origin "Request origin"
+        string created_at "ISO 8601"
     }
 ```
 
@@ -292,10 +313,12 @@ cp .env.example .env
 npm run dev
 ```
 
-Verify types and production build:
+Verify types, production build, and documentation parity:
 ```bash
-npm run lint    # tsc --noEmit
-npm run build   # Vite + Workbox PWA bundle -> ./dist
+npm run lint                  # tsc --noEmit
+npm run build                 # Vite + Workbox PWA bundle -> ./dist
+npm run docs:check -- --strict # Zero-dependency Node 22+ docs drift audit
+npm run admin:reset -- --help  # Emergency Admin password / recovery key CLI
 ```
 
 ### Debian VPS Production Deployment (Summary)
@@ -307,17 +330,17 @@ npm run build   # Vite + Workbox PWA bundle -> ./dist
    - **Node 22 + PM2 (Minimal disk)**: `npm ci --include=dev && npm run lint && npm run build && npm prune --omit=dev && NODE_ENV=production pm2 start server.ts --name diecut-room --interpreter node --max-memory-restart 220M`
 5. **Debian Nginx (`sites-available`) + Certbot HTTPS**: Add `/etc/nginx/sites-available/diecut-room` from [`deploy/nginx-diecut.conf`](./deploy/nginx-diecut.conf), symlink to `sites-enabled/`, run `sudo nginx -t && sudo systemctl reload nginx`, and issue TLS via `sudo certbot --nginx -d cad.yourdomain.com`.
 
-> **Deploying with an Autonomous AI Agent on Your Debian VPS?**  
-> Point your VPS agent to [`AGENTS.md`](./AGENTS.md) and [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md) right after `git pull`.
+> **Opening this repo with an AI Coding Agent (ADE / Antigravity / Codex / Claude) or VPS Ops Agent?**  
+> Start with [`docs/STATUS.md`](./docs/STATUS.md) + `npm run docs:check`, and follow [`AGENTS.md`](./AGENTS.md) / [`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md).
 
 ---
 
 ## Typography Drop-In (Timeless Grotesk) & PWA Resilience
 
 - **Timeless Grotesk Drop-In (`public/fonts/`)**: Place licensed `TimelessGrotesk.woff2` (or weight files `-Regular.woff2`, `-Medium.woff2`, `-SemiBold.woff2`, `-Bold.woff2`) inside [`public/fonts/`](./public/fonts/README.md) **before** `npm run build` / `docker compose build`. At runtime, `GET /api/fonts/available` discovers present files with zero 404 console errors when empty, falling back cleanly to `Plus Jakarta Sans` and `JetBrains Mono`.
-- **Resilient Workbox PWA ([`vite.config.ts`](./vite.config.ts) + [`index.html`](./index.html))**:
+- **Resilient Workbox PWA ([`vite.config.ts`](./vite.config.ts) + [`index.html`](./index.html) + [`src/utils/lazyWithRetry.ts`](./src/utils/lazyWithRetry.ts))**:
   - Uses `NetworkFirst` for HTML navigations (`navigateFallback: null`), `CacheFirst` for immutable `/assets/*` bundles, and strict `NetworkOnly` for `/api/*`.
-  - Production Express serves explicit `404` on missing `/assets/*` or `/fonts/*` files (never returning HTML masquerading as JS/CSS), paired with an `index.html` boot-recovery watchdog that auto-clears stale Service Workers if a module script ever fails after an update.
+  - Production Express serves explicit `404` on missing `/assets/*` or `/fonts/*` files (never returning HTML masquerading as JS/CSS), paired with an `index.html` boot-recovery watchdog and `lazyWithRetry.ts` dynamic-import reload guard.
   - Nginx serves `/sw.js`, `/registerSW.js`, `/manifest.webmanifest`, and `/index.html` with `Cache-Control: no-cache, no-store, must-revalidate`.
 
 ---
@@ -328,12 +351,13 @@ Detailed operational guides, engineering derivations, API contracts, and runbook
 
 | Document | Scope |
 | :--- | :--- |
-| **[`AGENTS.md`](./AGENTS.md)** | Mandatory root contract for Debian VPS AI Agents: multi-app coexistence rules, runtime decision matrix, Debian Node/Nginx checks, stop-gates, and Go-Live proof requirements. |
+| **[`docs/STATUS.md`](./docs/STATUS.md)** | **Certified Single Source of Truth**: `verified_at_commit`, Capability Ledger (`IMPLEMENTED` vs `NOT PRESENT`), entrypoint map, visual design anchor, 5-table SQLite & env summary, and Known Gaps. |
+| **[`AGENTS.md`](./AGENTS.md)** | Universal AI Agent & Debian VPS contract: First-Scan protocol, Truth Order, Precision Tactile Studio anchor, multi-app VPS coexistence rules, runtime decision matrix, stop-gates, and Go-Live proof. |
 | **[`docs/01-USER-GUIDE.md`](./docs/01-USER-GUIDE.md)** | End-to-end User & Admin handbook: Halftone Login Gate, WhatsApp metadata, Admin Console, 2D FEFCO CAD, 13 SRP presets, 3D Fit & Tear simulator, Palletizer Pro 3D, Responsive Focus Mode/Landscape HUD, SVG/PDF export, and BCT Pro. |
 | **[`docs/02-ENGINEERING-FORMULAS.md`](./docs/02-ENGINEERING-FORMULAS.md)** | Paper grade catalog (up to K300/White Top/Semi-Chem), TUF tables, TAPPI/ISO vs. BCT Pro ECT & McKee equations, panel ink crush math, 8 Pre-Flight rules, Palletizer case-pack/stability physics, and costing formulas. |
 | **[`docs/03-VPS-SUBDOMAIN-DEPLOYMENT.md`](./docs/03-VPS-SUBDOMAIN-DEPLOYMENT.md)** | Manual Debian VPS setup: DNS `A` record, Docker Compose vs. PM2 (`npm ci --include=dev`), Debian Nginx `sites-available` + Certbot SSL, UFW firewall, PWA install, custom font drop-in, and SQLite backups (`sqlite3` & Node `VACUUM INTO`). |
-| **[`docs/04-DEVELOPER-ARCHITECTURE.md`](./docs/04-DEVELOPER-ARCHITECTURE.md)** | Developer internals: system data flow, adaptive WebGL engine, responsive layout hook, SQLite WAL table schemas, cookie signing (`scrypt` + HMAC), Workbox routing, boot watchdog, and feature extension guides. |
+| **[`docs/04-DEVELOPER-ARCHITECTURE.md`](./docs/04-DEVELOPER-ARCHITECTURE.md)** | Developer internals: system data flow, adaptive WebGL engine, `apiSession.ts` + `lazyWithRetry.ts`, 5-table SQLite WAL schemas, dual Cookie+Bearer auth, Workbox routing, and feature extension guides. |
 | **[`docs/05-AI-AGENT-VPS-RUNBOOK.md`](./docs/05-AI-AGENT-VPS-RUNBOOK.md)** | Executable AI Agent runbook for Debian VPS after `git pull`: conflict audit, Node/Docker selection, `.env` & port isolation, Nginx `sites-available` + SSL setup, `curl` E2E smoke tests, backup cron, `git pull` update/rollback, and Go-Live checklist. |
-| **[`docs/06-API-REFERENCE.md`](./docs/06-API-REFERENCE.md)** | Complete REST API contract (`/api/health`, `/api/fonts/available`, `/api/auth/*`, `/api/admin/users/*`, `/api/history/*`, `/api/projects/*`) with JSON payloads, error codes, and `curl` snippets. |
-| **[`docs/07-TROUBLESHOOTING-AND-SECURITY.md`](./docs/07-TROUBLESHOOTING-AND-SECURITY.md)** | Day-2 operations: Admin recovery (`node:sqlite` + `scrypt`), Nginx rate-limiting (`limit_req`), Debian & production error matrix (`NODE_ENV=production`, Debian Node 18, cookies, Cloudflare, `SQLITE_READONLY`, PWA cache), and cross-VPS SQLite migration. |
-| **[`docs/08-GITHUB-SETUP-AND-CHANGELOG.md`](./docs/08-GITHUB-SETUP-AND-CHANGELOG.md)** | GitHub push hygiene, read-only SSH Deploy Key setup for private repos, release tagging, and complete version changelog (`v1.0.0` – `v1.5.0`). |
+| **[`docs/06-API-REFERENCE.md`](./docs/06-API-REFERENCE.md)** | Complete REST & MCP API contract (all 43 `/api/*` routes: health, fonts, auth, recovery key/OTP, 4-tab admin ops, backups, Hermes Agent REST, MCP, history, and projects) with JSON payloads and error codes. |
+| **[`docs/07-TROUBLESHOOTING-AND-SECURITY.md`](./docs/07-TROUBLESHOOTING-AND-SECURITY.md)** | Day-2 operations: Admin recovery (`admin:reset` / `node:sqlite` + `scrypt`), Nginx rate-limiting (`limit_req`), Debian & production error matrix, and cross-VPS SQLite migration. |
+| **[`docs/08-GITHUB-SETUP-AND-CHANGELOG.md`](./docs/08-GITHUB-SETUP-AND-CHANGELOG.md)** | GitHub push hygiene, read-only SSH Deploy Key setup for private repos, release tagging, and complete version changelog (`v1.0.0` – `Unreleased post-v1.5.0`). |

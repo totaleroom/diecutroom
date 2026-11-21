@@ -10,6 +10,7 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  FileDown,
   Flame,
   Layers,
   Package,
@@ -20,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  X,
 } from 'lucide-react';
 import {
   BoxConfig,
@@ -48,6 +50,7 @@ import {
   pickOptimalPatternType,
 } from '../utils/palletizer';
 import { getEngineProfile, createDynamicResolutionController } from '../utils/browserEngine';
+import { exportPalletizerReportPdf } from '../utils/palletizerReportPdf';
 import type {
   PalletizerWorkerRequest,
   PalletizerWorkerResponse,
@@ -194,14 +197,14 @@ function createCartonTopTexture(colorMode: 'kraft' | 'white', maxAniso: number):
   ctx.stroke();
 
   // Crisp TOPS-style directional chevron pointing +X so 0° vs 90° vs 180° orientation is unmistakable
-  ctx.strokeStyle = colorMode === 'kraft' ? '#4F3216' : '#334155';
-  ctx.lineWidth = 6;
+  ctx.strokeStyle = colorMode === 'kraft' ? '#4F3216' : '#17191F';
+  ctx.lineWidth = 7;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(106, 86);
-  ctx.lineTo(154, 128);
-  ctx.lineTo(106, 170);
+  ctx.moveTo(104, 84);
+  ctx.lineTo(156, 128);
+  ctx.lineTo(104, 172);
   ctx.stroke();
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -215,10 +218,476 @@ function disposeGroupResources(root: THREE.Object3D) {
     const mesh = obj as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
     if (mesh.material) {
-      if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
-      else mesh.material.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      mats.forEach((m) => {
+        const std = m as THREE.MeshStandardMaterial;
+        if (std.map) std.map.dispose();
+        m.dispose();
+      });
     }
   });
+}
+
+interface PopulatePalletGroupParams {
+  group: THREE.Group;
+  pallet: PalletConfig;
+  activeEvaluation: PalletPatternEvaluation;
+  outerDimensions: { length: number; width: number; depth: number };
+  materialColor: 'kraft' | 'white';
+  inspectLayer: number | null;
+  xRayMode: boolean;
+  viewOverlayMode: PalletViewOverlayMode;
+  maxAnisotropy: number;
+  orientationContrast?: boolean;
+}
+
+function populatePalletGroup({
+  group,
+  pallet,
+  activeEvaluation,
+  outerDimensions,
+  materialColor,
+  inspectLayer,
+  xRayMode,
+  viewOverlayMode,
+  maxAnisotropy,
+  orientationContrast = false,
+}: PopulatePalletGroupParams) {
+  disposeGroupResources(group);
+  group.clear();
+
+  // Scale 1 mm = 0.001 Three.js world meters
+  const S = 0.001;
+  const pL = pallet.palletLengthMm * S;
+  const pW = pallet.palletWidthMm * S;
+  const pH = pallet.palletHeightMm * S;
+
+  const woodTex = createWoodPalletTexture();
+  const woodMat = new THREE.MeshStandardMaterial({
+    map: woodTex,
+    roughness: 0.78,
+    metalness: 0.02,
+  });
+  const woodBlockMat = new THREE.MeshStandardMaterial({
+    color: '#A57E52',
+    roughness: 0.85,
+    metalness: 0.02,
+  });
+
+  // 1. Composite Wooden Pallet (7 top deckboards + 3 bottom runners + 9 stringer blocks)
+  const deckT = Math.min(0.024, pH * 0.16);
+  const runnerT = deckT;
+  const blockH = Math.max(0.04, pH - deckT - runnerT);
+
+  const slatCount = 7;
+  const slatWidth = (pW * 0.72) / slatCount;
+  for (let i = 0; i < slatCount; i++) {
+    const zPos = -pW / 2 + slatWidth / 2 + (i * (pW - slatWidth)) / (slatCount - 1);
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(pL, deckT, slatWidth), woodMat);
+    slat.position.set(0, pH - deckT / 2, zPos);
+    slat.castShadow = true;
+    slat.receiveShadow = true;
+    group.add(slat);
+  }
+
+  const runnerW = Math.min(0.1, pW * 0.1);
+  [-pW / 2 + runnerW / 2, 0, pW / 2 - runnerW / 2].forEach((zPos) => {
+    const runner = new THREE.Mesh(new THREE.BoxGeometry(pL, runnerT, runnerW), woodMat);
+    runner.position.set(0, runnerT / 2, zPos);
+    runner.receiveShadow = true;
+    group.add(runner);
+  });
+
+  const blockL = Math.min(0.14, pL * 0.12);
+  const xCoords = [-pL / 2 + blockL / 2, 0, pL / 2 - blockL / 2];
+  const zCoords = [-pW / 2 + runnerW / 2, 0, pW / 2 - runnerW / 2];
+  const blockGeo = new THREE.BoxGeometry(blockL, blockH, runnerW);
+  for (const bx of xCoords) {
+    for (const bz of zCoords) {
+      const blk = new THREE.Mesh(blockGeo, woodBlockMat);
+      blk.position.set(bx, runnerT + blockH / 2, bz);
+      blk.castShadow = true;
+      group.add(blk);
+    }
+  }
+
+  // 2. Pallet Footprint & Allowed Overhang Wireframe Guides
+  const overM = Math.max(0, pallet.allowedOverhangMm) * S;
+  const deckOutlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(pL, 0.004, pW));
+  const hasOverhang = activeEvaluation.overhangL > 0.5 || activeEvaluation.overhangW > 0.5;
+  const deckOutline = new THREE.LineSegments(
+    deckOutlineGeo,
+    new THREE.LineBasicMaterial({
+      color: hasOverhang ? '#d97706' : '#16a34a',
+    })
+  );
+  deckOutline.position.set(0, pH + 0.002, 0);
+  group.add(deckOutline);
+
+  if (overM > 0.002) {
+    const overGeo = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(pL + 2 * overM, 0.002, pW + 2 * overM)
+    );
+    const overLine = new THREE.LineSegments(
+      overGeo,
+      new THREE.LineBasicMaterial({ color: '#dc2626', transparent: true, opacity: 0.6 })
+    );
+    overLine.position.set(0, pH + 0.001, 0);
+    group.add(overLine);
+  }
+
+  // 3. Optional Bottom Slip Sheet
+  if (pallet.useSlipSheet) {
+    const slipGeo = new THREE.BoxGeometry(pL - 0.01, 0.002, pW - 0.01);
+    const slipMat = new THREE.MeshStandardMaterial({
+      color: '#8D6E48',
+      roughness: 0.9,
+    });
+    const slip = new THREE.Mesh(slipGeo, slipMat);
+    slip.position.set(0, pH + 0.001, 0);
+    slip.receiveShadow = true;
+    group.add(slip);
+  }
+
+  // 4. Filter visible placements by inspectLayer
+  const maxVisibleLayer = inspectLayer ?? activeEvaluation.layerCount;
+  const visiblePlacements = activeEvaluation.placements.filter((b) => b.layer <= maxVisibleLayer);
+
+  if (visiblePlacements.length > 0) {
+    const isHeatmap = viewOverlayMode === 'lock-heatmap';
+    const texColorMode = isHeatmap || orientationContrast ? 'white' : materialColor;
+    const sideTex = createCartonSideTexture(texColorMode, maxAnisotropy);
+    const topTex = createCartonTopTexture(texColorMode, maxAnisotropy);
+
+    const sideMat = new THREE.MeshStandardMaterial({
+      map: sideTex,
+      color: isHeatmap || orientationContrast ? '#ffffff' : undefined,
+      roughness: isHeatmap ? 0.55 : orientationContrast ? 0.58 : 0.68,
+      metalness: 0.04,
+      transparent: xRayMode,
+      opacity: xRayMode ? 0.36 : 1,
+      depthWrite: !xRayMode,
+    });
+    const topMat = new THREE.MeshStandardMaterial({
+      map: topTex,
+      color: isHeatmap || orientationContrast ? '#ffffff' : undefined,
+      roughness: isHeatmap ? 0.48 : orientationContrast ? 0.50 : 0.56,
+      metalness: 0.04,
+      transparent: xRayMode,
+      opacity: xRayMode ? 0.42 : 1,
+      depthWrite: !xRayMode,
+    });
+    const cartonMaterials = [sideMat, sideMat, topMat, sideMat, sideMat, sideMat];
+
+    const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const instanced = new THREE.InstancedMesh(unitBoxGeo, cartonMaterials, visiblePlacements.length);
+    instanced.castShadow = !xRayMode;
+    instanced.receiveShadow = !xRayMode;
+
+    const edgePositions: number[] = [];
+    const pad = 0.0025;
+    const baseLx = Math.max(0.01, outerDimensions.length * S - pad);
+    const baseWz = Math.max(0.01, outerDimensions.width * S - pad);
+
+    visiblePlacements.forEach((b, idx) => {
+      const sx = Math.max(0.01, b.sizeX * S - pad);
+      const sy = Math.max(0.01, b.sizeY * S - 0.0015);
+      const sz = Math.max(0.01, b.sizeZ * S - pad);
+      const cx = b.x * S;
+      const cy = b.y * S + sy / 2;
+      const cz = b.z * S;
+
+      _dummyObj.position.set(cx, cy, cz);
+      _dummyObj.rotation.set(0, THREE.MathUtils.degToRad(b.angleDeg), 0);
+      _dummyObj.scale.set(baseLx, sy, baseWz);
+      _dummyObj.updateMatrix();
+      instanced.setMatrixAt(idx, _dummyObj.matrix);
+
+      if (isHeatmap) {
+        if (b.lockStatus === 'locked') {
+          _tmpColor.set('#22C55E');
+        } else if (b.lockStatus === 'at-risk') {
+          _tmpColor.set('#EF4444');
+        } else {
+          _tmpColor.set('#F59E0B');
+        }
+      } else if (orientationContrast) {
+        const layerOdd = b.layer % 2 === 1;
+        _tmpColor.set(
+          b.rotated90 ? (layerOdd ? '#38BDF8' : '#0EA5E9') : layerOdd ? '#FACC15' : '#EAB308'
+        );
+      } else {
+        const layerOdd = b.layer % 2 === 1;
+        if (materialColor === 'kraft') {
+          _tmpColor.set(
+            b.rotated90 ? (layerOdd ? '#E2BD8B' : '#CFA876') : layerOdd ? '#D5AE7E' : '#C29A6A'
+          );
+        } else {
+          _tmpColor.set(
+            b.rotated90 ? (layerOdd ? '#E2E8F0' : '#D5DEE8') : layerOdd ? '#F8FAFC' : '#EEF2F6'
+          );
+        }
+      }
+      instanced.setColorAt(idx, _tmpColor);
+
+      const hx = sx / 2;
+      const hy = sy / 2;
+      const hz = sz / 2;
+      const corners = [
+        [cx - hx, cy - hy, cz - hz],
+        [cx + hx, cy - hy, cz - hz],
+        [cx + hx, cy - hy, cz + hz],
+        [cx - hx, cy - hy, cz + hz],
+        [cx - hx, cy + hy, cz - hz],
+        [cx + hx, cy + hy, cz - hz],
+        [cx + hx, cy + hy, cz + hz],
+        [cx - hx, cy + hy, cz + hz],
+      ];
+      const pairs = [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+      ];
+      for (const [a, c] of pairs) {
+        edgePositions.push(...corners[a], ...corners[c]);
+      }
+    });
+
+    instanced.instanceMatrix.needsUpdate = true;
+    if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
+    instanced.computeBoundingBox();
+    instanced.computeBoundingSphere();
+    group.add(instanced);
+
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+    const edges = new THREE.LineSegments(
+      lineGeo,
+      new THREE.LineBasicMaterial({
+        color: isHeatmap
+          ? '#1E293B'
+          : orientationContrast
+          ? '#17191F'
+          : materialColor === 'kraft'
+          ? '#6D4C2F'
+          : '#64748B',
+        transparent: true,
+        opacity: xRayMode ? 0.85 : orientationContrast ? 0.92 : isHeatmap ? 0.55 : 0.45,
+      })
+    );
+    group.add(edges);
+
+    // 5. Optional Interlayer Tier Sheets
+    if (pallet.useTierSheets && maxVisibleLayer > 1) {
+      const tierT = Math.max(0.002, pallet.tierSheetThicknessMm * S);
+      const tierGeo = new THREE.BoxGeometry(
+        Math.max(pL, activeEvaluation.footprintL * S),
+        tierT,
+        Math.max(pW, activeEvaluation.footprintW * S)
+      );
+      const tierMat = new THREE.MeshStandardMaterial({
+        color: '#7C5A3A',
+        roughness: 0.85,
+      });
+      const slipH = pallet.useSlipSheet ? 0.002 : 0;
+      const boxH = outerDimensions.depth * S;
+      for (let lyr = 1; lyr < maxVisibleLayer; lyr++) {
+        const padY = pH + slipH + lyr * boxH + (lyr - 0.5) * tierT;
+        const padMesh = new THREE.Mesh(tierGeo, tierMat);
+        padMesh.position.set(0, padY, 0);
+        group.add(padMesh);
+      }
+    }
+
+    // 6. Optional 4 Structural Corner Posts
+    if (pallet.useCornerPosts && activeEvaluation.footprintL > 0 && activeEvaluation.footprintW > 0) {
+      const halfFL = (activeEvaluation.footprintL * S) / 2;
+      const halfFW = (activeEvaluation.footprintW * S) / 2;
+      const slipH = pallet.useSlipSheet ? 0.002 : 0;
+      const stackSpanH = Math.max(
+        0.08,
+        maxVisibleLayer * (outerDimensions.depth * S) +
+          Math.max(0, maxVisibleLayer - 1) * (pallet.useTierSheets ? pallet.tierSheetThicknessMm * S : 0)
+      );
+      const postMat = new THREE.MeshStandardMaterial({
+        color: '#334155',
+        roughness: 0.55,
+        metalness: 0.15,
+      });
+      const legLen = 0.055;
+      const legThick = 0.006;
+
+      [
+        [-1, -1],
+        [1, -1],
+        [1, 1],
+        [-1, 1],
+      ].forEach(([sx, sz]) => {
+        const postGrp = new THREE.Group();
+        const wingX = new THREE.Mesh(new THREE.BoxGeometry(legLen, stackSpanH, legThick), postMat);
+        wingX.position.set(
+          sx * (halfFL - legLen / 2 + legThick / 2),
+          pH + slipH + stackSpanH / 2,
+          sz * (halfFW + legThick / 2)
+        );
+
+        const wingZ = new THREE.Mesh(new THREE.BoxGeometry(legThick, stackSpanH, legLen), postMat);
+        wingZ.position.set(
+          sx * (halfFL + legThick / 2),
+          pH + slipH + stackSpanH / 2,
+          sz * (halfFW - legLen / 2 + legThick / 2)
+        );
+
+        postGrp.add(wingX, wingZ);
+        group.add(postGrp);
+      });
+    }
+
+    // 7. Top-Layer Plakban / Perimeter Strapping Band
+    if (pallet.useTopLayerPlakban) {
+      const topBoxes = visiblePlacements.filter((b) => b.layer === maxVisibleLayer);
+      if (topBoxes.length > 0) {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minZ = Infinity;
+        let maxZ = -Infinity;
+        let topBaseY = topBoxes[0].y * S;
+        const topH = topBoxes[0].sizeY * S;
+
+        for (const b of topBoxes) {
+          minX = Math.min(minX, (b.x - b.sizeX / 2) * S);
+          maxX = Math.max(maxX, (b.x + b.sizeX / 2) * S);
+          minZ = Math.min(minZ, (b.z - b.sizeZ / 2) * S);
+          maxZ = Math.max(maxZ, (b.z + b.sizeZ / 2) * S);
+          topBaseY = Math.max(topBaseY, b.y * S);
+        }
+
+        const tapeOffset = 0.0025;
+        const spanX = maxX - minX + tapeOffset * 2;
+        const spanZ = maxZ - minZ + tapeOffset * 2;
+        const centerX = (minX + maxX) / 2;
+        const centerZ = (minZ + maxZ) / 2;
+        const bandH = Math.min(0.052, Math.max(0.028, topH * 0.22));
+        const bandThick = 0.003;
+        const bandCenterY = topBaseY + topH * 0.56;
+
+        const tapeMat = new THREE.MeshStandardMaterial({
+          color: '#F59E0B',
+          roughness: 0.28,
+          metalness: 0.08,
+          transparent: true,
+          opacity: 0.88,
+        });
+
+        const northBand = new THREE.Mesh(new THREE.BoxGeometry(spanX, bandH, bandThick), tapeMat);
+        northBand.position.set(centerX, bandCenterY, minZ - tapeOffset);
+        const southBand = new THREE.Mesh(new THREE.BoxGeometry(spanX, bandH, bandThick), tapeMat);
+        southBand.position.set(centerX, bandCenterY, maxZ + tapeOffset);
+
+        const westBand = new THREE.Mesh(new THREE.BoxGeometry(bandThick, bandH, spanZ), tapeMat);
+        westBand.position.set(minX - tapeOffset, bandCenterY, centerZ);
+        const eastBand = new THREE.Mesh(new THREE.BoxGeometry(bandThick, bandH, spanZ), tapeMat);
+        eastBand.position.set(maxX + tapeOffset, bandCenterY, centerZ);
+
+        group.add(northBand, southBand, westBand, eastBand);
+        if (topH > 0.19) {
+          const bandCenterY2 = topBaseY + topH * 0.84;
+          const n2 = northBand.clone();
+          n2.position.y = bandCenterY2;
+          const s2 = southBand.clone();
+          s2.position.y = bandCenterY2;
+          const w2 = westBand.clone();
+          w2.position.y = bandCenterY2;
+          const e2 = eastBand.clone();
+          e2.position.y = bandCenterY2;
+          group.add(n2, s2, w2, e2);
+        }
+      }
+    }
+
+    // 8. 3D Unbridged Cleavage Fault-Line Warning Planes
+    const faultLines = activeEvaluation.stability?.faultLines || [];
+    if (faultLines.length > 0 && (isHeatmap || faultLines.some((fl) => fl.severity === 'critical'))) {
+      const slipH = pallet.useSlipSheet ? 0.002 : 0;
+      const tierPadM = pallet.useTierSheets ? Math.max(0.001, pallet.tierSheetThicknessMm * S) : 0;
+      const visH = Math.max(
+        0.08,
+        maxVisibleLayer * (outerDimensions.depth * S) + Math.max(0, maxVisibleLayer - 1) * tierPadM
+      );
+      const spanL = Math.max(pL, activeEvaluation.footprintL * S) + 0.03;
+      const spanW = Math.max(pW, activeEvaluation.footprintW * S) + 0.03;
+
+      faultLines.forEach((fl) => {
+        const isCrit = fl.severity === 'critical';
+        if (!isHeatmap && !isCrit) return;
+        const planeMat = new THREE.MeshBasicMaterial({
+          color: isCrit ? '#DC2626' : '#F59E0B',
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: isHeatmap ? (isCrit ? 0.24 : 0.16) : 0.11,
+          depthWrite: false,
+        });
+        const planeGeo =
+          fl.axis === 'x' ? new THREE.PlaneGeometry(spanW, visH) : new THREE.PlaneGeometry(spanL, visH);
+        const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+        if (fl.axis === 'x') {
+          planeMesh.rotation.y = Math.PI / 2;
+          planeMesh.position.set(fl.posMm * S, pH + slipH + visH / 2, 0);
+        } else {
+          planeMesh.position.set(0, pH + slipH + visH / 2, fl.posMm * S);
+        }
+        group.add(planeMesh);
+      });
+    }
+
+    // 9. 3D Unsupported Corner Markers in Heat-Map Mode
+    if (isHeatmap) {
+      const markerPts: Array<{ x: number; y: number; z: number }> = [];
+      for (const b of visiblePlacements) {
+        if (b.layer <= 1 || !b.unsupportedCornerCoords?.length) continue;
+        const yTopM = (b.y + b.sizeY) * S;
+        for (const [ux, uz] of b.unsupportedCornerCoords) {
+          markerPts.push({ x: ux * S, y: yTopM, z: uz * S });
+        }
+      }
+
+      if (markerPts.length > 0) {
+        const haloGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.004, 14);
+        const haloMat = new THREE.MeshStandardMaterial({
+          color: '#EA580C',
+          emissive: '#C2410C',
+          emissiveIntensity: 0.45,
+          roughness: 0.35,
+        });
+        const haloInst = new THREE.InstancedMesh(haloGeo, haloMat, markerPts.length);
+
+        const pinGeo = new THREE.CylinderGeometry(0.004, 0.008, 0.026, 8);
+        const pinMat = new THREE.MeshStandardMaterial({
+          color: '#DC2626',
+          emissive: '#991B1B',
+          emissiveIntensity: 0.4,
+          roughness: 0.3,
+        });
+        const pinInst = new THREE.InstancedMesh(pinGeo, pinMat, markerPts.length);
+
+        markerPts.forEach((pt, i) => {
+          _dummyObj.position.set(pt.x, pt.y + 0.002, pt.z);
+          _dummyObj.rotation.set(0, 0, 0);
+          _dummyObj.scale.set(1, 1, 1);
+          _dummyObj.updateMatrix();
+          haloInst.setMatrixAt(i, _dummyObj.matrix);
+
+          _dummyObj.position.set(pt.x, pt.y + 0.015, pt.z);
+          _dummyObj.updateMatrix();
+          pinInst.setMatrixAt(i, _dummyObj.matrix);
+        });
+
+        haloInst.instanceMatrix.needsUpdate = true;
+        pinInst.instanceMatrix.needsUpdate = true;
+        group.add(haloInst, pinInst);
+      }
+    }
+  }
 }
 
 const _dummyObj = new THREE.Object3D();
@@ -373,6 +842,10 @@ export default function PalletizerWorkspace({
     () => typeof window !== 'undefined' && window.innerWidth < 640
   );
   const [contextLost, setContextLost] = useState(false);
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [reportProjectName, setReportProjectName] = useState(() => config.metadata.productName || '');
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportPdfError, setExportPdfError] = useState<string | null>(null);
 
   // Solve right-sizing solutions for primary products
   const casePackSolutions = useMemo(
@@ -666,6 +1139,8 @@ export default function PalletizerWorkspace({
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const palletGroupRef = useRef<THREE.Group | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const groundPlaneRef = useRef<THREE.Mesh | null>(null);
   const requestRenderRef = useRef<() => void>(() => {});
   const cameraAnimRef = useRef<{
     active: boolean;
@@ -754,6 +1229,7 @@ export default function PalletizerWorkspace({
     const grid = new THREE.GridHelper(6, 24, '#cbd5e1', '#e2e8f0');
     grid.position.y = 0;
     scene.add(grid);
+    gridRef.current = grid;
 
     const groundMat = new THREE.ShadowMaterial({ opacity: 0.14 });
     const groundPlane = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), groundMat);
@@ -761,6 +1237,7 @@ export default function PalletizerWorkspace({
     groundPlane.position.y = -0.001;
     groundPlane.receiveShadow = profile.shadowsEnabled;
     scene.add(groundPlane);
+    groundPlaneRef.current = groundPlane;
 
     const palletGroup = new THREE.Group();
     scene.add(palletGroup);
@@ -913,441 +1390,22 @@ export default function PalletizerWorkspace({
     const group = palletGroupRef.current;
     if (!group) return;
 
-    disposeGroupResources(group);
-    group.clear();
-
-    // Scale 1 mm = 0.001 Three.js world meters
-    const S = 0.001;
-    const pL = pallet.palletLengthMm * S;
-    const pW = pallet.palletWidthMm * S;
-    const pH = pallet.palletHeightMm * S;
-
-    const woodTex = createWoodPalletTexture();
-    const woodMat = new THREE.MeshStandardMaterial({
-      map: woodTex,
-      roughness: 0.78,
-      metalness: 0.02,
-    });
-    const woodBlockMat = new THREE.MeshStandardMaterial({
-      color: '#A57E52',
-      roughness: 0.85,
-      metalness: 0.02,
-    });
-
-    // 1. Composite Wooden Pallet (7 top deckboards + 3 bottom runners + 9 stringer blocks)
-    const deckT = Math.min(0.024, pH * 0.16);
-    const runnerT = deckT;
-    const blockH = Math.max(0.04, pH - deckT - runnerT);
-
-    // Top deckboards
-    const slatCount = 7;
-    const slatWidth = (pW * 0.72) / slatCount;
-    for (let i = 0; i < slatCount; i++) {
-      const zPos = -pW / 2 + slatWidth / 2 + (i * (pW - slatWidth)) / (slatCount - 1);
-      const slat = new THREE.Mesh(new THREE.BoxGeometry(pL, deckT, slatWidth), woodMat);
-      slat.position.set(0, pH - deckT / 2, zPos);
-      slat.castShadow = true;
-      slat.receiveShadow = true;
-      group.add(slat);
-    }
-
-    // Bottom runners along L
-    const runnerW = Math.min(0.1, pW * 0.1);
-    [-pW / 2 + runnerW / 2, 0, pW / 2 - runnerW / 2].forEach((zPos) => {
-      const runner = new THREE.Mesh(new THREE.BoxGeometry(pL, runnerT, runnerW), woodMat);
-      runner.position.set(0, runnerT / 2, zPos);
-      runner.receiveShadow = true;
-      group.add(runner);
-    });
-
-    // 9 Stringer Blocks
-    const blockL = Math.min(0.14, pL * 0.12);
-    const xCoords = [-pL / 2 + blockL / 2, 0, pL / 2 - blockL / 2];
-    const zCoords = [-pW / 2 + runnerW / 2, 0, pW / 2 - runnerW / 2];
-    const blockGeo = new THREE.BoxGeometry(blockL, blockH, runnerW);
-    for (const bx of xCoords) {
-      for (const bz of zCoords) {
-        const blk = new THREE.Mesh(blockGeo, woodBlockMat);
-        blk.position.set(bx, runnerT + blockH / 2, bz);
-        blk.castShadow = true;
-        group.add(blk);
-      }
-    }
-
-    // 2. Pallet Footprint & Allowed Overhang Wireframe Guides
-    const overM = Math.max(0, pallet.allowedOverhangMm) * S;
-    const deckOutlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(pL, 0.004, pW));
-    const hasOverhang = activeEvaluation.overhangL > 0.5 || activeEvaluation.overhangW > 0.5;
-    const deckOutline = new THREE.LineSegments(
-      deckOutlineGeo,
-      new THREE.LineBasicMaterial({
-        color: hasOverhang ? '#d97706' : '#16a34a',
-      })
-    );
-    deckOutline.position.set(0, pH + 0.002, 0);
-    group.add(deckOutline);
-
-    if (overM > 0.002) {
-      const overGeo = new THREE.EdgesGeometry(
-        new THREE.BoxGeometry(pL + 2 * overM, 0.002, pW + 2 * overM)
-      );
-      const overLine = new THREE.LineSegments(
-        overGeo,
-        new THREE.LineBasicMaterial({ color: '#dc2626', transparent: true, opacity: 0.6 })
-      );
-      overLine.position.set(0, pH + 0.001, 0);
-      group.add(overLine);
-    }
-
-    // 3. Optional Bottom Slip Sheet
-    if (pallet.useSlipSheet) {
-      const slipGeo = new THREE.BoxGeometry(pL - 0.01, 0.002, pW - 0.01);
-      const slipMat = new THREE.MeshStandardMaterial({
-        color: '#8D6E48',
-        roughness: 0.9,
-      });
-      const slip = new THREE.Mesh(slipGeo, slipMat);
-      slip.position.set(0, pH + 0.001, 0);
-      slip.receiveShadow = true;
-      group.add(slip);
-    }
-
-    // 4. Filter visible placements by inspectLayer
-    const maxVisibleLayer = inspectLayer ?? activeEvaluation.layerCount;
-    const visiblePlacements = activeEvaluation.placements.filter(
-      (b) => b.layer <= maxVisibleLayer
+    const maxAniso = Math.min(
+      getEngineProfile().maxAnisotropyCap,
+      rendererRef.current?.capabilities.getMaxAnisotropy() || 4
     );
 
-    if (visiblePlacements.length > 0) {
-      const maxAniso = Math.min(
-        getEngineProfile().maxAnisotropyCap,
-        rendererRef.current?.capabilities.getMaxAnisotropy() || 4
-      );
-      const isHeatmap = viewOverlayMode === 'lock-heatmap';
-      const texColorMode = isHeatmap ? 'white' : config.materialColor;
-      const sideTex = createCartonSideTexture(texColorMode, maxAniso);
-      const topTex = createCartonTopTexture(texColorMode, maxAniso);
-
-      const sideMat = new THREE.MeshStandardMaterial({
-        map: sideTex,
-        color: isHeatmap ? '#ffffff' : undefined,
-        roughness: isHeatmap ? 0.55 : 0.68,
-        metalness: 0.04,
-        transparent: xRayMode,
-        opacity: xRayMode ? 0.36 : 1,
-        depthWrite: !xRayMode,
-      });
-      const topMat = new THREE.MeshStandardMaterial({
-        map: topTex,
-        color: isHeatmap ? '#ffffff' : undefined,
-        roughness: isHeatmap ? 0.48 : 0.56,
-        metalness: 0.04,
-        transparent: xRayMode,
-        opacity: xRayMode ? 0.42 : 1,
-        depthWrite: !xRayMode,
-      });
-      // BoxGeometry faces: [+X, -X, +Y (Top), -Y, +Z, -Z]
-      const cartonMaterials = [sideMat, sideMat, topMat, sideMat, sideMat, sideMat];
-
-      const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-      const instanced = new THREE.InstancedMesh(
-        unitBoxGeo,
-        cartonMaterials,
-        visiblePlacements.length
-      );
-      instanced.castShadow = !xRayMode;
-      instanced.receiveShadow = !xRayMode;
-
-      const edgePositions: number[] = [];
-      const pad = 0.0025; // crisp 2.5mm visual seam gap between adjacent cartons
-      const baseLx = Math.max(0.01, paths.info.outerDimensions.length * S - pad);
-      const baseWz = Math.max(0.01, paths.info.outerDimensions.width * S - pad);
-
-      visiblePlacements.forEach((b, idx) => {
-        const sx = Math.max(0.01, b.sizeX * S - pad);
-        const sy = Math.max(0.01, b.sizeY * S - 0.0015);
-        const sz = Math.max(0.01, b.sizeZ * S - pad);
-        const cx = b.x * S;
-        const cy = b.y * S + sy / 2;
-        const cz = b.z * S;
-
-        _dummyObj.position.set(cx, cy, cz);
-        _dummyObj.rotation.set(0, THREE.MathUtils.degToRad(b.angleDeg), 0);
-        _dummyObj.scale.set(baseLx, sy, baseWz);
-        _dummyObj.updateMatrix();
-        instanced.setMatrixAt(idx, _dummyObj.matrix);
-
-        if (isHeatmap) {
-          if (b.lockStatus === 'locked') {
-            _tmpColor.set('#22C55E'); // Emerald: strong cross-tie lock (>=2 supports)
-          } else if (b.lockStatus === 'at-risk') {
-            _tmpColor.set('#EF4444'); // Crimson: loose top edge / overhang / unbridged fault
-          } else {
-            _tmpColor.set('#F59E0B'); // Amber: 1:1 vertical column alignment
-          }
-        } else {
-          // Subtle deterministic tint variation by layer & 90-deg orientation so brick interlock pops
-          const layerOdd = b.layer % 2 === 1;
-          if (config.materialColor === 'kraft') {
-            _tmpColor.set(b.rotated90 ? (layerOdd ? '#E2BD8B' : '#CFA876') : layerOdd ? '#D5AE7E' : '#C29A6A');
-          } else {
-            _tmpColor.set(b.rotated90 ? (layerOdd ? '#E2E8F0' : '#D5DEE8') : layerOdd ? '#F8FAFC' : '#EEF2F6');
-          }
-        }
-        instanced.setColorAt(idx, _tmpColor);
-
-        // Append crisp wireframe edge vertices per carton
-        const hx = sx / 2;
-        const hy = sy / 2;
-        const hz = sz / 2;
-        const corners = [
-          [cx - hx, cy - hy, cz - hz],
-          [cx + hx, cy - hy, cz - hz],
-          [cx + hx, cy - hy, cz + hz],
-          [cx - hx, cy - hy, cz + hz],
-          [cx - hx, cy + hy, cz - hz],
-          [cx + hx, cy + hy, cz - hz],
-          [cx + hx, cy + hy, cz + hz],
-          [cx - hx, cy + hy, cz + hz],
-        ];
-        const pairs = [
-          [0, 1], [1, 2], [2, 3], [3, 0],
-          [4, 5], [5, 6], [6, 7], [7, 4],
-          [0, 4], [1, 5], [2, 6], [3, 7],
-        ];
-        for (const [a, c] of pairs) {
-          edgePositions.push(...corners[a], ...corners[c]);
-        }
-      });
-
-      instanced.instanceMatrix.needsUpdate = true;
-      if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
-      instanced.computeBoundingSphere();
-      group.add(instanced);
-
-      const lineGeo = new THREE.BufferGeometry();
-      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
-      const edges = new THREE.LineSegments(
-        lineGeo,
-        new THREE.LineBasicMaterial({
-          color: isHeatmap ? '#1E293B' : config.materialColor === 'kraft' ? '#6D4C2F' : '#64748B',
-          transparent: true,
-          opacity: xRayMode ? 0.85 : isHeatmap ? 0.55 : 0.45,
-        })
-      );
-      group.add(edges);
-
-      // 5. Optional Interlayer Tier Sheets between visible layers
-      if (pallet.useTierSheets && maxVisibleLayer > 1) {
-        const tierT = Math.max(0.002, pallet.tierSheetThicknessMm * S);
-        const tierGeo = new THREE.BoxGeometry(
-          Math.max(pL, activeEvaluation.footprintL * S),
-          tierT,
-          Math.max(pW, activeEvaluation.footprintW * S)
-        );
-        const tierMat = new THREE.MeshStandardMaterial({
-          color: '#7C5A3A',
-          roughness: 0.85,
-        });
-        const slipH = pallet.useSlipSheet ? 0.002 : 0;
-        const boxH = paths.info.outerDimensions.depth * S;
-        for (let lyr = 1; lyr < maxVisibleLayer; lyr++) {
-          const padY = pH + slipH + lyr * boxH + (lyr - 0.5) * tierT;
-          const padMesh = new THREE.Mesh(tierGeo, tierMat);
-          padMesh.position.set(0, padY, 0);
-          group.add(padMesh);
-        }
-      }
-
-      // 6. Optional 4 Structural Corner Posts
-      if (pallet.useCornerPosts && activeEvaluation.footprintL > 0 && activeEvaluation.footprintW > 0) {
-        const halfFL = (activeEvaluation.footprintL * S) / 2;
-        const halfFW = (activeEvaluation.footprintW * S) / 2;
-        const slipH = pallet.useSlipSheet ? 0.002 : 0;
-        const stackSpanH = Math.max(
-          0.08,
-          maxVisibleLayer * (paths.info.outerDimensions.depth * S) +
-            Math.max(0, maxVisibleLayer - 1) * (pallet.useTierSheets ? pallet.tierSheetThicknessMm * S : 0)
-        );
-        const postMat = new THREE.MeshStandardMaterial({
-          color: '#334155',
-          roughness: 0.55,
-          metalness: 0.15,
-        });
-        const legLen = 0.055;
-        const legThick = 0.006;
-
-        [
-          [-1, -1],
-          [1, -1],
-          [1, 1],
-          [-1, 1],
-        ].forEach(([sx, sz]) => {
-          const postGrp = new THREE.Group();
-          const wingX = new THREE.Mesh(
-            new THREE.BoxGeometry(legLen, stackSpanH, legThick),
-            postMat
-          );
-          wingX.position.set(sx * (halfFL - legLen / 2 + legThick / 2), pH + slipH + stackSpanH / 2, sz * (halfFW + legThick / 2));
-
-          const wingZ = new THREE.Mesh(
-            new THREE.BoxGeometry(legThick, stackSpanH, legLen),
-            postMat
-          );
-          wingZ.position.set(sx * (halfFL + legThick / 2), pH + slipH + stackSpanH / 2, sz * (halfFW - legLen / 2 + legThick / 2));
-
-          postGrp.add(wingX, wingZ);
-          group.add(postGrp);
-        });
-      }
-
-      // 7. Top-Layer Plakban / Perimeter Strapping Band (Secures Top Layer During Forklift Transit)
-      if (pallet.useTopLayerPlakban) {
-        const topBoxes = visiblePlacements.filter((b) => b.layer === maxVisibleLayer);
-        if (topBoxes.length > 0) {
-          let minX = Infinity;
-          let maxX = -Infinity;
-          let minZ = Infinity;
-          let maxZ = -Infinity;
-          let topBaseY = topBoxes[0].y * S;
-          const topH = topBoxes[0].sizeY * S;
-
-          for (const b of topBoxes) {
-            minX = Math.min(minX, (b.x - b.sizeX / 2) * S);
-            maxX = Math.max(maxX, (b.x + b.sizeX / 2) * S);
-            minZ = Math.min(minZ, (b.z - b.sizeZ / 2) * S);
-            maxZ = Math.max(maxZ, (b.z + b.sizeZ / 2) * S);
-            topBaseY = Math.max(topBaseY, b.y * S);
-          }
-
-          const tapeOffset = 0.0025; // clean offset outside outer carton walls to prevent Z-fighting
-          const spanX = maxX - minX + tapeOffset * 2;
-          const spanZ = maxZ - minZ + tapeOffset * 2;
-          const centerX = (minX + maxX) / 2;
-          const centerZ = (minZ + maxZ) / 2;
-          const bandH = Math.min(0.052, Math.max(0.028, topH * 0.22));
-          const bandThick = 0.003;
-          const bandCenterY = topBaseY + topH * 0.56;
-
-          const tapeMat = new THREE.MeshStandardMaterial({
-            color: '#F59E0B',
-            roughness: 0.28,
-            metalness: 0.08,
-            transparent: true,
-            opacity: 0.88,
-          });
-
-          const northBand = new THREE.Mesh(new THREE.BoxGeometry(spanX, bandH, bandThick), tapeMat);
-          northBand.position.set(centerX, bandCenterY, minZ - tapeOffset);
-          const southBand = new THREE.Mesh(new THREE.BoxGeometry(spanX, bandH, bandThick), tapeMat);
-          southBand.position.set(centerX, bandCenterY, maxZ + tapeOffset);
-
-          const westBand = new THREE.Mesh(new THREE.BoxGeometry(bandThick, bandH, spanZ), tapeMat);
-          westBand.position.set(minX - tapeOffset, bandCenterY, centerZ);
-          const eastBand = new THREE.Mesh(new THREE.BoxGeometry(bandThick, bandH, spanZ), tapeMat);
-          eastBand.position.set(maxX + tapeOffset, bandCenterY, centerZ);
-
-          // Upper secondary tension band near top shoulder when carton is tall
-          group.add(northBand, southBand, westBand, eastBand);
-          if (topH > 0.19) {
-            const bandCenterY2 = topBaseY + topH * 0.84;
-            const n2 = northBand.clone();
-            n2.position.y = bandCenterY2;
-            const s2 = southBand.clone();
-            s2.position.y = bandCenterY2;
-            const w2 = westBand.clone();
-            w2.position.y = bandCenterY2;
-            const e2 = eastBand.clone();
-            e2.position.y = bandCenterY2;
-            group.add(n2, s2, w2, e2);
-          }
-        }
-      }
-
-      // 8. 3D Unbridged Cleavage Fault-Line Warning Planes
-      const faultLines = activeEvaluation.stability?.faultLines || [];
-      if (faultLines.length > 0 && (isHeatmap || faultLines.some((fl) => fl.severity === 'critical'))) {
-        const slipH = pallet.useSlipSheet ? 0.002 : 0;
-        const tierPadM = pallet.useTierSheets ? Math.max(0.001, pallet.tierSheetThicknessMm * S) : 0;
-        const visH = Math.max(
-          0.08,
-          maxVisibleLayer * (paths.info.outerDimensions.depth * S) + Math.max(0, maxVisibleLayer - 1) * tierPadM
-        );
-        const spanL = Math.max(pL, activeEvaluation.footprintL * S) + 0.03;
-        const spanW = Math.max(pW, activeEvaluation.footprintW * S) + 0.03;
-
-        faultLines.forEach((fl) => {
-          const isCrit = fl.severity === 'critical';
-          if (!isHeatmap && !isCrit) return;
-          const planeMat = new THREE.MeshBasicMaterial({
-            color: isCrit ? '#DC2626' : '#F59E0B',
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: isHeatmap ? (isCrit ? 0.24 : 0.16) : 0.11,
-            depthWrite: false,
-          });
-          const planeGeo =
-            fl.axis === 'x'
-              ? new THREE.PlaneGeometry(spanW, visH)
-              : new THREE.PlaneGeometry(spanL, visH);
-          const planeMesh = new THREE.Mesh(planeGeo, planeMat);
-          if (fl.axis === 'x') {
-            planeMesh.rotation.y = Math.PI / 2;
-            planeMesh.position.set(fl.posMm * S, pH + slipH + visH / 2, 0);
-          } else {
-            planeMesh.position.set(0, pH + slipH + visH / 2, fl.posMm * S);
-          }
-          group.add(planeMesh);
-        });
-      }
-      // 9. 3D Unsupported Corner Markers (Sudut Dus Tidak Menumpu di Mode Heat-Map)
-      if (isHeatmap) {
-        const markerPts: Array<{ x: number; y: number; z: number }> = [];
-        for (const b of visiblePlacements) {
-          if (b.layer <= 1 || !b.unsupportedCornerCoords?.length) continue;
-          const yTopM = (b.y + b.sizeY) * S;
-          for (const [ux, uz] of b.unsupportedCornerCoords) {
-            markerPts.push({ x: ux * S, y: yTopM, z: uz * S });
-          }
-        }
-
-        if (markerPts.length > 0) {
-          const haloGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.004, 14);
-          const haloMat = new THREE.MeshStandardMaterial({
-            color: '#EA580C',
-            emissive: '#C2410C',
-            emissiveIntensity: 0.45,
-            roughness: 0.35,
-          });
-          const haloInst = new THREE.InstancedMesh(haloGeo, haloMat, markerPts.length);
-
-          const pinGeo = new THREE.CylinderGeometry(0.004, 0.008, 0.026, 8);
-          const pinMat = new THREE.MeshStandardMaterial({
-            color: '#DC2626',
-            emissive: '#991B1B',
-            emissiveIntensity: 0.4,
-            roughness: 0.3,
-          });
-          const pinInst = new THREE.InstancedMesh(pinGeo, pinMat, markerPts.length);
-
-          markerPts.forEach((pt, i) => {
-            _dummyObj.position.set(pt.x, pt.y + 0.002, pt.z);
-            _dummyObj.rotation.set(0, 0, 0);
-            _dummyObj.scale.set(1, 1, 1);
-            _dummyObj.updateMatrix();
-            haloInst.setMatrixAt(i, _dummyObj.matrix);
-
-            _dummyObj.position.set(pt.x, pt.y + 0.015, pt.z);
-            _dummyObj.updateMatrix();
-            pinInst.setMatrixAt(i, _dummyObj.matrix);
-          });
-
-          haloInst.instanceMatrix.needsUpdate = true;
-          pinInst.instanceMatrix.needsUpdate = true;
-          group.add(haloInst, pinInst);
-        }
-      }
-    }
+    populatePalletGroup({
+      group,
+      pallet,
+      activeEvaluation,
+      outerDimensions: paths.info.outerDimensions,
+      materialColor: config.materialColor,
+      inspectLayer,
+      xRayMode,
+      viewOverlayMode,
+      maxAnisotropy: maxAniso,
+    });
 
     requestRenderRef.current();
   }, [pallet, activeEvaluation, inspectLayer, xRayMode, viewOverlayMode, config.materialColor, paths.info.outerDimensions]);
@@ -1370,6 +1428,281 @@ export default function PalletizerWorkspace({
     }
     anim.active = true;
     requestRenderRef.current();
+  };
+
+  const handleOpenPdfModal = () => {
+    setExportPdfError(null);
+    setReportProjectName((prev) => prev || config.metadata.productName || '');
+    setPdfModalOpen(true);
+  };
+
+  const handleExportPdfReport = async () => {
+    if (exportingPdf) return;
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    const group = palletGroupRef.current;
+    const controls = controlsRef.current;
+
+    if (contextLost || !renderer || !scene || !camera || !group) {
+      setExportPdfError('Konteks 3D WebGL sedang tidak aktif. Muat ulang tampilan 3D terlebih dahulu.');
+      return;
+    }
+
+    setExportingPdf(true);
+    setExportPdfError(null);
+
+    const prevPos = camera.position.clone();
+    const prevQuat = camera.quaternion.clone();
+    const prevUp = camera.up.clone();
+    const prevAspect = camera.aspect;
+    const prevTarget = controls?.target.clone() || new THREE.Vector3(0, 0.55, 0);
+    const prevSize = renderer.getSize(new THREE.Vector2());
+    const prevPixelRatio = renderer.getPixelRatio();
+    const prevBg = scene.background;
+    const prevFog = scene.fog;
+    const prevGridVisible = gridRef.current ? gridRef.current.visible : true;
+    const prevGroundVisible = groundPlaneRef.current ? groundPlaneRef.current.visible : true;
+
+    const maxAniso = Math.min(
+      getEngineProfile().maxAnisotropyCap,
+      renderer.capabilities.getMaxAnisotropy() || 4
+    );
+
+    try {
+      const capW = 960;
+      const capH = 640; // ~3:2 matching PDF cards
+      const aspect = capW / capH;
+      renderer.setPixelRatio(1);
+      renderer.setSize(capW, capH, false);
+      scene.background = new THREE.Color('#FFFFFF');
+      scene.fog = null;
+      if (gridRef.current) gridRef.current.visible = false;
+      if (groundPlaneRef.current) groundPlaneRef.current.visible = false;
+
+      const S = 0.001;
+      const pL = pallet.palletLengthMm * S;
+      const pW = pallet.palletWidthMm * S;
+      const footL = Math.max(pL, activeEvaluation.footprintL * S);
+      const footW = Math.max(pW, activeEvaluation.footprintW * S);
+      const stackH = Math.max(0.28, activeEvaluation.totalStackHeightMm * S);
+
+      // Exact carton stack extents in world meters for crisp L x W x H PDF annotations
+      let cMinX = -(activeEvaluation.footprintL * S) / 2;
+      let cMaxX = (activeEvaluation.footprintL * S) / 2;
+      let cMinZ = -(activeEvaluation.footprintW * S) / 2;
+      let cMaxZ = (activeEvaluation.footprintW * S) / 2;
+      let cMaxY = stackH;
+      if (activeEvaluation.placements.length > 0) {
+        cMinX = Math.min(...activeEvaluation.placements.map((b) => (b.x - b.sizeX / 2) * S));
+        cMaxX = Math.max(...activeEvaluation.placements.map((b) => (b.x + b.sizeX / 2) * S));
+        cMinZ = Math.min(...activeEvaluation.placements.map((b) => (b.z - b.sizeZ / 2) * S));
+        cMaxZ = Math.max(...activeEvaluation.placements.map((b) => (b.z + b.sizeZ / 2) * S));
+        cMaxY = Math.max(...activeEvaluation.placements.map((b) => (b.y + b.sizeY) * S));
+      }
+
+      const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 30);
+
+      const computeGroupBounds = () => {
+        group.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(group);
+        box.expandByPoint(new THREE.Vector3(-footL / 2, 0, -footW / 2));
+        box.expandByPoint(new THREE.Vector3(footL / 2, 0, footW / 2));
+        activeEvaluation.placements.forEach((b) => {
+          box.expandByPoint(
+            new THREE.Vector3((b.x - b.sizeX / 2) * S, b.y * S, (b.z - b.sizeZ / 2) * S)
+          );
+          box.expandByPoint(
+            new THREE.Vector3((b.x + b.sizeX / 2) * S, (b.y + b.sizeY) * S, (b.z + b.sizeZ / 2) * S)
+          );
+        });
+        const center = box.getCenter(new THREE.Vector3());
+        const boxCorners = [
+          new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+          new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+          new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+          new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+          new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+          new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+          new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+          new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+        ];
+        return { center, boxCorners };
+      };
+
+      const projectWorldToUv = (wx: number, wy: number, wz: number) => {
+        const ndc = new THREE.Vector3(wx, wy, wz).project(orthoCam);
+        return {
+          u: (ndc.x + 1) * 0.5,
+          v: (1 - ndc.y) * 0.5,
+        };
+      };
+
+      const renderOrthoAngle = (preset: CameraPreset, padFactor: number): string => {
+        const { center, boxCorners } = computeGroupBounds();
+        if (preset === 'iso') {
+          orthoCam.up.set(0, 1, 0);
+          // Steeper ~40 deg pitch so operator clearly sees entire top (last) layer + 2 side walls
+          const dir = new THREE.Vector3(0.76, 0.92, 0.82).normalize();
+          orthoCam.position.copy(center).addScaledVector(dir, 10);
+        } else if (preset === 'top') {
+          // Dead-flat orthographic top view: +X right, +Z down (aligned with 2D Layer 1/2 guides)
+          orthoCam.up.set(0, 0, -1);
+          orthoCam.position.set(center.x, center.y + 10, center.z);
+        } else if (preset === 'front') {
+          orthoCam.up.set(0, 1, 0);
+          orthoCam.position.set(center.x, center.y, center.z + 10);
+        } else {
+          orthoCam.up.set(0, 1, 0);
+          orthoCam.position.set(center.x + 10, center.y, center.z);
+        }
+
+        orthoCam.lookAt(center);
+        orthoCam.updateMatrixWorld(true);
+
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const corner of boxCorners) {
+          const camPt = corner.clone().applyMatrix4(orthoCam.matrixWorldInverse);
+          if (camPt.x < minX) minX = camPt.x;
+          if (camPt.x > maxX) maxX = camPt.x;
+          if (camPt.y < minY) minY = camPt.y;
+          if (camPt.y > maxY) maxY = camPt.y;
+        }
+
+        const spanX = Math.max(0.2, maxX - minX) * padFactor;
+        const spanY = Math.max(0.2, maxY - minY) * padFactor;
+        const midCamX = (minX + maxX) / 2;
+        const midCamY = (minY + maxY) / 2;
+
+        let halfW = spanX / 2;
+        let halfH = spanY / 2;
+        if (halfW / halfH > aspect) {
+          halfH = halfW / aspect;
+        } else {
+          halfW = halfH * aspect;
+        }
+
+        orthoCam.left = midCamX - halfW;
+        orthoCam.right = midCamX + halfW;
+        orthoCam.top = midCamY + halfH;
+        orthoCam.bottom = midCamY - halfH;
+        orthoCam.updateProjectionMatrix();
+
+        renderer.render(scene, orthoCam);
+        return renderer.domElement.toDataURL('image/png');
+      };
+
+      // 1. Capture 4 Orthographic POVs in high-contrast 0 vs 90 deg Orientation mode
+      populatePalletGroup({
+        group,
+        pallet,
+        activeEvaluation,
+        outerDimensions: paths.info.outerDimensions,
+        materialColor: config.materialColor,
+        inspectLayer: null,
+        xRayMode: false,
+        viewOverlayMode: 'normal',
+        maxAnisotropy: maxAniso,
+        orientationContrast: true,
+      });
+
+      const normalIso = renderOrthoAngle('iso', 1.32);
+      const isoAnchors = {
+        frontLeftBottom: projectWorldToUv(cMinX, 0, cMaxZ),
+        frontCornerBottom: projectWorldToUv(cMaxX, 0, cMaxZ),
+        backRightBottom: projectWorldToUv(cMaxX, 0, cMinZ),
+        backRightTop: projectWorldToUv(cMaxX, cMaxY, cMinZ),
+      };
+
+      const normalTop = renderOrthoAngle('top', 1.28);
+      const topAnchors = {
+        topLeft: projectWorldToUv(cMinX, cMaxY, cMinZ),
+        topRight: projectWorldToUv(cMaxX, cMaxY, cMinZ),
+        bottomRight: projectWorldToUv(cMaxX, cMaxY, cMaxZ),
+      };
+
+      const normalFront = renderOrthoAngle('front', 1.16);
+      const normalSide = renderOrthoAngle('side', 1.16);
+
+      // 2. Capture dedicated Orthographic Heat-Map Iso & Top
+      populatePalletGroup({
+        group,
+        pallet,
+        activeEvaluation,
+        outerDimensions: paths.info.outerDimensions,
+        materialColor: config.materialColor,
+        inspectLayer: null,
+        xRayMode: false,
+        viewOverlayMode: 'lock-heatmap',
+        maxAnisotropy: maxAniso,
+        orientationContrast: false,
+      });
+
+      const heatmapIso = renderOrthoAngle('iso', 1.22);
+      const heatmapTop = renderOrthoAngle('top', 1.16);
+
+      await exportPalletizerReportPdf({
+        projectOrClientName: reportProjectName.trim() || undefined,
+        config,
+        paths,
+        analysis,
+        pallet,
+        casePack,
+        syncedCaseGrossKg,
+        activeEvaluation,
+        captures: {
+          normalIso,
+          normalTop,
+          normalFront,
+          normalSide,
+          heatmapIso,
+          heatmapTop,
+          isoAnchors,
+          topAnchors,
+        },
+      });
+
+      setPdfModalOpen(false);
+    } catch (err) {
+      setExportPdfError(
+        err instanceof Error ? err.message : 'Gagal membuat file PDF laporan Palletizer.'
+      );
+    } finally {
+      // Always restore user's exact 3D scene, camera & viewport size
+      scene.background = prevBg;
+      scene.fog = prevFog;
+      if (gridRef.current) gridRef.current.visible = prevGridVisible;
+      if (groundPlaneRef.current) groundPlaneRef.current.visible = prevGroundVisible;
+      renderer.setPixelRatio(prevPixelRatio);
+      renderer.setSize(Math.max(100, prevSize.x), Math.max(100, prevSize.y), false);
+      camera.up.copy(prevUp);
+      camera.aspect = prevAspect;
+      camera.position.copy(prevPos);
+      camera.quaternion.copy(prevQuat);
+      camera.updateProjectionMatrix();
+      if (controls) {
+        controls.target.copy(prevTarget);
+        controls.update();
+      }
+      populatePalletGroup({
+        group,
+        pallet,
+        activeEvaluation,
+        outerDimensions: paths.info.outerDimensions,
+        materialColor: config.materialColor,
+        inspectLayer,
+        xRayMode,
+        viewOverlayMode,
+        maxAnisotropy: maxAniso,
+        orientationContrast: false,
+      });
+      renderer.render(scene, camera);
+      requestRenderRef.current();
+      setExportingPdf(false);
+    }
   };
 
   const bctStatusMeta =
@@ -2438,6 +2771,19 @@ export default function PalletizerWorkspace({
                       </TactileButton>
                     </div>
                   )}
+                  <div className="pt-1">
+                    <TactileButton
+                      type="button"
+                      variant="primary"
+                      size="default"
+                      className="w-full justify-center"
+                      onClick={handleOpenPdfModal}
+                      disabled={contextLost || exportingPdf}
+                    >
+                      <FileDown size={14} />
+                      <span>Export Laporan PDF Palletizer</span>
+                    </TactileButton>
+                  </div>
                 </div>
               </TactileSection>
             </>
@@ -2513,6 +2859,19 @@ export default function PalletizerWorkspace({
             aria-label="Reset view"
           >
             <RotateCcw size={12} />
+          </TactileButton>
+          <div className="h-3.5 w-[0.5px] bg-[var(--line)] mx-0.5 shrink-0" />
+          <TactileButton
+            type="button"
+            variant="primary"
+            size="inline"
+            className="h-[26px] px-2 text-[11px] shrink-0"
+            onClick={handleOpenPdfModal}
+            disabled={contextLost || exportingPdf}
+            title="Export Laporan Engineering Palletizer PDF (A4 2 Halaman)"
+          >
+            <FileDown size={12} />
+            <span>Export PDF</span>
           </TactileButton>
         </div>
 
@@ -2751,6 +3110,117 @@ export default function PalletizerWorkspace({
           )
         )}
       </div>
+
+      {/* Export Laporan Engineering Palletizer PDF Dialog */}
+      {pdfModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pallet-pdf-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--backdrop)] backdrop-blur-[2px]"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !exportingPdf) {
+              setPdfModalOpen(false);
+            }
+          }}
+        >
+          <div className="surface-raised w-full max-w-[400px] bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] overflow-hidden">
+            <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2
+                  id="pallet-pdf-modal-title"
+                  className="text-[13px] font-semibold text-[var(--ink-12)] truncate"
+                >
+                  Export Laporan Palletizer PDF
+                </h2>
+                <p className="text-[11px] text-[var(--ink-10)]">
+                  Format A4 · 2 Halaman siap cetak &amp; serah terima gudang
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={exportingPdf}
+                onClick={() => setPdfModalOpen(false)}
+                aria-label="Tutup dialog Export PDF"
+                className="size-7 rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer disabled:opacity-50"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3.5 text-[12px]">
+              <div>
+                <label
+                  htmlFor="pallet-pdf-project-name"
+                  className="block text-[11px] font-medium text-[var(--ink-11)] mb-1"
+                >
+                  Nama Proyek / Klien (Opsional)
+                </label>
+                <TactileInputWell
+                  id="pallet-pdf-project-name"
+                  type="text"
+                  maxLength={80}
+                  value={reportProjectName}
+                  onChange={(e) => setReportProjectName(e.target.value)}
+                  placeholder="Contoh: PT Karya Kemas · SKU Minyak 1L"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !exportingPdf) {
+                      void handleExportPdfReport();
+                    } else if (e.key === 'Escape' && !exportingPdf) {
+                      setPdfModalOpen(false);
+                    }
+                  }}
+                />
+                <p className="mt-1 text-[10.5px] text-[var(--ink-10)]">
+                  Ditampilkan di header Halaman 1 &amp; 2 dan menjadi nama file PDF.
+                </p>
+              </div>
+
+              <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] border-[0.5px] border-[var(--line)] p-2.5 space-y-1 text-[11px] text-[var(--ink-11)]">
+                <div className="font-medium text-[var(--ink-12)]">Isi Laporan PDF (2 Halaman A4):</div>
+                <ul className="space-y-0.5 pl-3.5 list-disc">
+                  <li>
+                    <span className="font-medium text-[var(--ink-12)]">Hal 1:</span> Status Tumpukan, Spec &amp; Material, Tipe Palet &amp; Aksesori, Operating Conditions, Audit BCT, Audit Stabilitas, serta Diagram 2D Layer 1 &amp; Layer 2 (bernomor dus, panah orientasi, dimensi mm).
+                  </li>
+                  <li>
+                    <span className="font-medium text-[var(--ink-12)]">Hal 2:</span> 4 POV Normal (Iso, Top, Front, Side) + Panel Khusus Heat-Map (Iso &amp; Top) beserta legenda penguncian &amp; sudut gantung.
+                  </li>
+                </ul>
+              </div>
+
+              {exportPdfError && (
+                <div className="rounded-[var(--radius-control)] bg-[var(--red-3)] border-[0.5px] border-[var(--red-6)] px-2.5 py-2 text-[11px] text-[var(--red-11)] flex items-start gap-1.5">
+                  <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                  <span>{exportPdfError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <TactileButton
+                  type="button"
+                  variant="secondary"
+                  size="default"
+                  disabled={exportingPdf}
+                  onClick={() => setPdfModalOpen(false)}
+                >
+                  Batal
+                </TactileButton>
+                <TactileButton
+                  type="button"
+                  variant="primary"
+                  size="default"
+                  disabled={exportingPdf}
+                  onClick={() => void handleExportPdfReport()}
+                >
+                  <FileDown size={14} />
+                  <span>{exportingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF (2 Hal)'}</span>
+                </TactileButton>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

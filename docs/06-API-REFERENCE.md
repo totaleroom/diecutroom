@@ -10,13 +10,15 @@ Dokumen ini merupakan referensi kontrak **REST API** lengkap backend Express (`s
   - Lokal / Internal VPS: `http://127.0.0.1:<APP_PORT>`
   - Produksi HTTPS: `https://<SUBDOMAIN>`
 - **Format Body**: `application/json` (batas maksimal payload `2mb`).
-- **Cookie Sesi**: `diecut_session` (`HttpOnly`, berlaku `14 hari`, bertanda HMAC-SHA256 `base64url(payload).hmac`).
-  - Pada permintaan HTTPS / di balik Nginx dengan `TRUST_PROXY=true`: `SameSite=None; Secure`.
-  - Pada HTTP localhost: `SameSite=Lax`.
+- **Dual Sesi Pengguna**:
+  - **Cookie Sesi**: `diecut_session` (`HttpOnly`, `Partitioned` saat HTTPS, berlaku `14 hari`, bertanda HMAC-SHA256 `base64url({ uid, ver, exp }).hmac`). Pada HTTPS / di balik Nginx dengan `TRUST_PROXY=true`: `SameSite=None; Secure; Partitioned`; pada HTTP localhost: `SameSite=Lax`.
+  - **Bearer Token**: `Authorization: Bearer <session_token>` yang dikembalikan pada respons login/recovery (digunakan otomatis oleh `src/utils/apiSession.ts` untuk lingkungan iframe/PWA ketat).
+- **Kunci AI Agent / MCP**: Header `X-Agent-Key: <agent_key>` atau `Authorization: Bearer <agent_key>` untuk endpoint `/api/agent/*` dan `POST /api/mcp`.
 - **Otorisasi Bertingkat**:
-  - **Public**: `GET /api/health`, `GET /api/fonts/available`, `GET /api/auth/me`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`.
+  - **Public**: `GET /api/health`, `GET /api/fonts/available`, `GET /api/auth/me`, `GET /api/auth/recovery-options`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/admin-recover`, `POST /api/auth/admin-recover/request-otp`, `POST /api/auth/admin-recover/verify-otp`, `POST /api/auth/logout`, `GET /api/agent/dieline/download` *(token bertanda tangan)*, `GET /api/mcp` *(metadata)* .
   - **Active User (`role: 'user' | 'admin'`, `status: 'active'`)**: Endpoint `/api/history/*` dan `/api/projects/*`.
   - **Admin Only (`role: 'admin'`, `status: 'active'`)**: Seluruh endpoint `/api/admin/*`.
+  - **Agent Key (`requireAgentKey`)**: `/api/agent/skill`, `/api/agent/connect`, `/api/agent/calculate`, `/api/agent/dieline`, `POST /api/mcp`.
 
 ---
 
@@ -198,6 +200,20 @@ Menghapus cookie sesi dari browser.
 
 ---
 
+### `GET /api/auth/recovery-options`
+Memeriksa opsi pemulihan Admin yang aktif di server (`recoveryKeyConfigured` dan `emailOtpConfigured` berdasarkan konfigurasi `system_meta` / env `ADMIN_RECOVERY_KEY` & `SMTP_*`).
+
+### `POST /api/auth/admin-recover`
+Memulihkan akses & mengganti password Admin menggunakan **Admin Recovery Key** (memvalidasi email Admin + kunci pemulihan, mereset lockout, menaikkan `token_version`, serta menerbitkan sesi baru).
+
+### `POST /api/auth/admin-recover/request-otp`
+Mengirim kode OTP 6 digit ke email Admin melalui konfigurasi SMTP aktif (dengan batas frekuensi permintaan dan catatan ke `audit_logs`).
+
+### `POST /api/auth/admin-recover/verify-otp`
+Memverifikasi kode OTP email Admin dan menerapkan password baru Admin secara aman.
+
+---
+
 ## 4. Endpoint Manajemen User Admin (`/api/admin/users/*`)
 
 Seluruh endpoint ini mewajibkan cookie sesi user dengan `role === 'admin'` dan `status === 'active'`. Jika tidak memenuhi syarat, server mengembalikan `401` (tanpa sesi) atau `403` (`{ "error": "Admin privileges required" }`).
@@ -272,6 +288,18 @@ Admin langsung mengganti password akun tertentu setelah user melakukan konfirmas
 
 ---
 
+### `POST /api/admin/users`
+Membuat akun user atau admin baru secara langsung dari Konsol Admin (dapat langsung berstatus `active`, `pending`, atau `disabled`).
+
+### `PATCH /api/admin/users/:id`
+Memperbarui profil dasar user (`name`, `company`, `role`, `status`) dengan perlindungan agar Admin tidak mencabut hak admin atau menonaktifkan akunnya sendiri.
+
+### `POST /api/admin/users/bulk-approve`
+Mengaktifkan seluruh akun berstatus `pending` (atau daftar `ids` tertentu) dalam satu operasi atomik dan mencatat kejadian di `audit_logs`.
+
+### `POST /api/admin/users/:id/revoke-sessions`
+Menaikkan kolom `token_version` milik user sasaran sehingga seluruh cookie & Bearer token lama langsung tidak berlaku di semua perangkat.
+
 ### `DELETE /api/admin/users/:id`
 Menghapus akun secara permanen beserta seluruh baris di `bct_history` dan `saved_projects` milik user tersebut (`ON DELETE CASCADE`).
 
@@ -284,6 +312,75 @@ Menghapus akun secara permanen beserta seluruh baris di `bct_history` dan `saved
 **Response Error**:
 - `400 Bad Request`: `{ "error": "Admin tidak dapat menghapus akun sendiri." }`
 - `404 Not Found`: `{ "error": "User tidak ditemukan." }`
+
+---
+
+## 4B. Endpoint Keamanan, Health Radar, Audit Logs & Backup Admin (`/api/admin/*`)
+
+Seluruh endpoint di bawah ini wajib memiliki sesi `role === 'admin'` dan `status === 'active'`.
+
+### `POST /api/admin/security/change-password`
+Mengganti password akun Admin yang sedang login (memverifikasi `currentPassword`, merotasi `token_version`, dan menerbitkan token sesi baru).
+
+### `POST /api/admin/security/rotate-recovery-key`
+Menghasilkan **Admin Recovery Key** baru (`DCR-XXXX-XXXX-XXXX-XXXX`), menyimpan hash-nya di `system_meta`, dan menampilkan kunci plaintext satu kali untuk disimpan Admin.
+
+### `GET /api/admin/security/smtp`
+Mengambil status konfigurasi SMTP Email OTP saat ini (`configured`, `source`, `host`, `port`, `secure`, `user`, `from` tanpa membocorkan `pass`).
+
+### `POST /api/admin/security/smtp`
+Menyimpan atau menghapus pengaturan server SMTP Email OTP pada tabel `system_meta`.
+
+### `POST /api/admin/security/smtp-test`
+Mengirim email uji koneksi SMTP ke alamat Admin untuk memverifikasi kredensial & konektivitas TLS/STARTTLS.
+
+### `GET /api/admin/security/agent-key`
+Mengambil status kunci integrasi AI Agent / MCP (`configured`, `prefix`, `updatedAt`) tanpa mengekspos kunci rahasia penuh.
+
+### `POST /api/admin/security/agent-key`
+Menerbitkan atau merotasi **Agent API Key** baru untuk integrasi Hermes Agent REST & MCP (hash disimpan di `system_meta`, plaintext tampil satu kali).
+
+### `DELETE /api/admin/security/agent-key`
+Mencabut dan menghapus **Agent API Key** aktif dari `system_meta`.
+
+### `GET /api/admin/health-radar`
+Mengembalikan telemetri operasional real-time: pemakaian RAM RSS/Heap dibanding `MEMORY_LIMIT_MB`, ukuran file SQLite WAL, jumlah user per status, status keamanan (`SESSION_SECRET`, `TRUST_PROXY`, Recovery Key, SMTP, Agent Key), serta *uptime* server.
+
+### `GET /api/admin/audit-logs`
+Mengambil daftar kronologis jejak keamanan dari tabel `audit_logs` dengan dukungan filter (`limit`, `severity`, `eventType`, pencarian teks).
+
+### `GET /api/admin/backup/sqlite`
+Membuat snapshot konsisten SQLite menggunakan `VACUUM INTO` dan mengunduhnya sebagai berkas `.db` biner.
+
+### `GET /api/admin/backup/json`
+Mengekspor cadangan terstruktur JSON (`users` tanpa `password_hash`, `saved_projects`, `bct_history`, `audit_logs`) sebagai lampiran unduhan.
+
+---
+
+## 4C. Endpoint Integrasi AI Agent (Hermes REST & MCP)
+
+Seluruh endpoint terlindungi memerlukan header `X-Agent-Key: <agent_key>` atau `Authorization: Bearer <agent_key>`.
+
+### `GET /api/agent/skill`
+Mengembalikan manifest *skill* & panduan penggunaan tool **DieCut.Room** dalam format terstruktur untuk Hermes / AI Agent eksternal.
+
+### `ALL /api/agent/connect`
+Endpoint *handshake* & verifikasi konektivitas kunci Agent (`GET` atau `POST`), mengembalikan daftar endpoint aktif (`submitEndpoint`, `dielineEndpoint`, `/api/mcp`) beserta status siap pakai.
+
+### `POST /api/agent/calculate`
+Menjalankan kalkulasi teknik kemasan (dimensi OD/ID FEFCO 0200–0204, luasan blank, estimasi ECT/BCT TAPPI-ISO, berat, dan faktor lingkungan) secara terprogram via JSON.
+
+### `POST /api/agent/dieline`
+Menghasilkan vektor **2D Dieline SVG / Clean CAD** skala `1:1 mm` berdasarkan parameter FEFCO & dimensi, sekaligus mengembalikan URL unduhan bertanda tangan sementara (`/api/agent/dieline/download`).
+
+### `GET /api/agent/dieline/download`
+Mengunduh file SVG Dieline 2D menggunakan token HMAC sementara yang diterbitkan oleh `POST /api/agent/dieline` (tanpa perlu mengekspos Agent API Key pada URL).
+
+### `GET /api/mcp`
+Mengembalikan metadata server **Model Context Protocol (MCP)** dan daftar kapabilitas yang didukung.
+
+### `POST /api/mcp`
+Endpoint **JSON-RPC 2.0 MCP** (`initialize`, `tools/list`, `tools/call`) bagi AI Agent yang terhubung langsung via protokol MCP untuk kalkulasi teknik dan pembuatan dieline 2D SVG/Clean CAD.
 
 ---
 

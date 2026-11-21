@@ -24,6 +24,7 @@ RUN npm install --omit=dev --no-save --no-audit --no-fund express@^4.21.2 dotenv
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
+COPY --from=builder /app/scripts/admin-reset.ts ./scripts/admin-reset.ts
 COPY --from=builder /app/public/fonts ./public/fonts
 
 # Persist SQLite database and session secret inside /app/data volume
