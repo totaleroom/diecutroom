@@ -3,7 +3,7 @@
 > **Do not edit manually.** Regenerate anytime with `npm run index:build` (`node scripts/generate-codebase-index.ts`, zero dependencies).
 > AI Agents: Read this index FIRST to jump directly to target line ranges without scanning multi-thousand-line files.
 
-- **Indexed Files**: 34 TypeScript/TSX modules (29,592 total lines)
+- **Indexed Files**: 35 TypeScript/TSX modules (30,581 total lines)
 - **Backend API Endpoints**: 43 routes in `server.ts`
 - **SQLite Tables**: 5 tables (`users` L65, `bct_history` L83, `saved_projects` L92, `system_meta` L106, `audit_logs` L112)
 
@@ -15,7 +15,8 @@
 | :--- | ---: | :--- |
 | `server.ts` | 4369 | *(entry / side-effect)* |
 | `scripts/admin-reset.ts` | 215 | *(entry / side-effect)* |
-| `scripts/check-docs-drift.ts` | 400 | *(entry / side-effect)* |
+| `scripts/capture-visual-snapshots.ts` | 899 | *(entry / side-effect)* |
+| `scripts/check-docs-drift.ts` | 490 | *(entry / side-effect)* |
 | `scripts/generate-codebase-index.ts` | 220 | `buildCodebaseIndexMarkdown` |
 | `src/App.tsx` | 1022 | `App` |
 | `src/components/AdminUsersModal.tsx` | 2586 | `AdminUsersModal` |
@@ -55,7 +56,8 @@
 Jump straight to these line anchors using targeted `StartLine`/`EndLine` reads to save tokens/credits:
 
 - **`server.ts` (4369 lines)**: `L12` fn resolveServerPort · `L31` fn isEnvPlaceholder · `L42` fn resolveSessionSecret · `L127` fn ensureUsersColumn · `L138` fn getSystemMeta · `L145` fn setSystemMeta · `L154` fn deleteSystemMeta · `L160` fn encryptSecret · `L168` fn decryptSecret · `L202` fn getConsoleSmtpRaw · `L212` fn resolveSmtpConfig · `L245` fn sanitizeHeaderVal · `L249` fn sendSmtpEmail · `L449` fn generateHumanRecoveryKey · `L459` fn recordAuditLog · `L494` fn hashPassword · `L500` fn verifyPassword · `L510` fn timingSafeStringMatch · `L518` fn ensureAdminAccount · `L571` fn sanitizeUser · `L590` fn signSessionToken · `L599` fn verifySessionToken · `L627` fn parseCookies · `L646` fn isHttpsRequest · `L658` fn setSessionCookie · `L670` fn clearSessionCookie · `L682` fn extractSessionToken · `L692` fn clipStr
-- **`scripts/check-docs-drift.ts` (400 lines)**: `L21` fn readText · `L27` fn parseArgs · `L34` fn printHelp · `L57` fn checkGitDrift · `L144` fn checkApiRoutesDrift · `L182` fn checkSchemaDrift · `L224` fn checkEnvVarDrift · `L267` fn checkScriptsAndDockerParity · `L305` fn checkCodebaseIndexFreshness · `L337` fn main
+- **`scripts/capture-visual-snapshots.ts` (899 lines)**: `L59` fn printHelp · `L78` fn findChromeBinary · `L201` fn launchChromium · `L255` fn getPageWsUrl · `L265` fn setViewport · `L276` fn waitFrames · `L289` fn waitForSelector · `L301` fn waitForText · `L313` fn clickByText · `L346` fn clickSelector · `L364` fn snap · `L403` fn loginAsAdmin · `L432` fn openAdminConsole · `L454` fn openProjectsModal · `L475` fn main
+- **`scripts/check-docs-drift.ts` (490 lines)**: `L21` fn readText · `L27` fn parseArgs · `L34` fn printHelp · `L58` fn checkGitDrift · `L145` fn checkApiRoutesDrift · `L183` fn checkSchemaDrift · `L225` fn checkEnvVarDrift · `L268` fn checkScriptsAndDockerParity · `L306` fn checkCodebaseIndexFreshness · `L338` fn checkVisualSnapshotsIntegrity · `L426` fn main
 - **`src/App.tsx` (1022 lines)**: `L57` export App · `L270` handleFooterBrandSecretTap · `L324` handleLogout · `L338` handleToggleLayer
 - **`src/components/AdminUsersModal.tsx` (2586 lines)**: `L59` fn formatBytes · `L67` fn formatDuration · `L97` fn buildHermesAgentSnippets · `L145` export AdminUsersModal · `L401` handleCreateUser · `L441` handleBulkApprove · `L468` handleToggleStatus · `L497` handleSaveEditUser · `L534` handleSetPassword · `L572` handleRevokeSessions · `L607` handleDeleteUser · `L631` handleChangeOwnPassword · `L675` handleRotateRecoveryKey · `L701` handleCopyRecoveryKey · `L712` handleDownloadRecoveryKeyTxt · `L736` handleDownloadBackup · `L790` handlePromoteCoAdmin · `L824` handleQuickCreateCoAdmin · `L833` handleSaveSmtp · `L869` handleClearConsoleSmtp · `L901` handleTestSmtp · `L924` handleGenerateAgentKey · `L976` handleRevokeAgentKey · `L999` handleCopyAgentSnippet
 - **`src/components/AuthGate.tsx` (777 lines)**: `L23` export AuthGate · `L83` handleSecretLogoTap · `L128` handleRequestOtp · `L163` handleAdminRecover · `L242` handleSubmit

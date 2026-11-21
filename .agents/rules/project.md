@@ -12,10 +12,10 @@ description: Core orientation, truth order, visual design fidelity, and static r
 - Never fabricate test results: `automated_tests: NOT PRESENT`. Verify with `npm run lint`, `npm run build`, `npm run index:build`, and `npm run docs:check -- --strict`.
 
 ## 2. Visual Design Fidelity Anchor
-- Follow root `DESIGN.md` and `.agents/skills/tactile-design/SKILL.md` for every UI change.
+- Follow root `DESIGN.md`, `docs/VISUAL-STATE-CATALOG.md` (27 live Desktop + Mobile screenshots in `docs/visual-snapshots/`), and `.agents/skills/tactile-design/SKILL.md` for every UI change. Vision-capable agents MUST inspect `docs/VISUAL-STATE-CATALOG.md` before modifying UI and MUST NOT invent custom layouts or alternative palettes.
 - Preserve exact **Precision Tactile Studio** CSS tokens in `src/index.css` (`#17191F`, `#474D58`, `#5C626E`, `#CDD2DB`, `#ECEEF1`, `#F4F5F7`, `#4F46E5`) and primitives in `src/components/tactile/TactileUI.tsx`.
 - Keep the sharp `2px` Halftone Offset-Sheet aesthetic on `AuthGate.tsx`, 4-tier responsive workspace (`useWorkspaceLayout.ts`), and `Palletizer` 2-page A4 PDF report branding consistent with the app.
-- Production brand logo lives at `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room). Other reference screenshots/PDFs in `public/assets/aistudio/` are design references, not runtime UI assets.
+- Production brand logo lives at `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room — the sole production asset in that folder). Run `npm run snapshots:capture` when UI states change materially.
 
 ## 3. Backend, Split-Deploy & Build Guardrails
 - Full-stack monolith: React 19 + Vite 6 + Tailwind v4 + Three.js + Web Worker + PWA (`vite-plugin-pwa`) served by Express (`server.ts`) on **Node.js 22+**. Do **NOT** rewrite the backend to Supabase, Base44 SDK, or serverless SQLite.

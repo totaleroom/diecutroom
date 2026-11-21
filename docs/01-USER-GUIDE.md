@@ -1,115 +1,134 @@
-# 01. Panduan Pengguna & Administrator — DieCut.Room
+# Panduan Lengkap Pengguna & Admin — DieCut.Room
 
-Dokumen ini menjelaskan seluruh alur kerja harian untuk **Pengguna Reguler (Packaging Engineer / Operator)** maupun **Administrator** di **DieCut.Room**.
+Dokumen ini memandu seluruh alur penggunaan **DieCut.Room** dari gerbang autentikasi hingga ekspor CAD produksi, simulasi 3D SRP, optimalisasi Palletizer Pro 3D (termasuk Laporan Engineering PDF A4), audit struktural BCT Pro, hingga operasional Konsol Admin 4-tab.
 
----
-
-## 1. Alur Akses Akun, Portal Halftone & Konfirmasi WhatsApp
-
-**DieCut.Room** berjalan secara **privat** pada domain/subdomain VPS Anda. Pengunjung tanpa sesi login aktif akan diarahkan ke layar gerbang akses (*Auth Gate*) berdesain lembar cetak offset putih matte sudut tegas (`2px`) berbingkai dot halftone dan gradasi raster kanan atas di atas kanvas matriks interaktif gelap.
-
-### A. Pendaftaran User Baru
-1. Pada halaman login, pilih tab **Daftar**.
-2. Isi **Nama lengkap**, **Tim / Perusahaan** (opsional), **Alamat email**, dan **Password** (minimal 6 karakter).
-3. Klik **Ajukan Pendaftaran Akun**.
-4. Akun baru otomatis tersimpan di database server dalam status **`Pending`** dan **belum dapat masuk** ke workspace hingga diaktifkan oleh Admin.
-5. Layar otomatis menampilkan kartu **Menunggu Persetujuan Admin** dengan tombol hijau berlogo WhatsApp (**Kirim Konfirmasi ke WhatsApp Admin**).
-6. Klik tombol tersebut untuk membuka chat WhatsApp ke **`+62 821-2508-6328`** berisi template pesan *"Halo Admin, saya ingin akses DieCut.Room..."* lengkap dengan data user serta **metadata asal akses** (subdomain/URL, referrer, perangkat/OS, browser, resolusi layar, mode PWA/browser, dan waktu lokal).
-
-### B. Kebijakan Lupa Password (Tanpa Self-Service Reset)
-* Demi menjaga kontrol akses privat, user biasa **tidak dapat** melakukan reset password sendiri melalui email.
-* Pada tab **Masuk**, tersedia tombol **Lupa Password · Hubungi Admin WhatsApp**.
-* Saat diklik, tombol menyertakan email yang diketik beserta metadata perangkat & URL asal akses langsung ke WhatsApp Admin (`+6282125086328`).
-* Setelah memverifikasi identitas user via WhatsApp, Admin langsung mengetikkan password baru untuk akun tersebut di Panel Admin dan mengirimkannya kembali ke user.
-
-### C. Pengoperasian Panel Admin (`Users`)
-Saat login sebagai **Admin**, tombol **Users** muncul pada bar atas workspace (atau di menu `···` pada layar sempit):
-* **Filter & Pencarian**: Saring berdasarkan status (`Semua`, `Pending`, `Aktif`, `Nonaktif`) atau cari berdasarkan nama, email, perusahaan, subdomain origin, maupun perangkat.
-* **Inspeksi Provenance / Asal Akses**: Setiap baris user menampilkan `Origin` URL/subdomain, `Perangkat`, `IP` terakhir, tanggal daftar, waktu login terakhir, serta jumlah Proyek & Riwayat BCT yang disimpan.
-* **Aktifkan / Nonaktifkan**:
-  * Klik **Aktifkan** pada user berstatus `Pending` atau `Nonaktif` agar user bisa langsung login.
-  * Klik **Nonaktifkan** untuk mencabut akses seketika; sesi aktif user tersebut otomatis ditolak pada pengecekan API berikutnya.
-* **Set Password**: Klik **Set Password**, masukkan password baru (minimal 6 karakter), lalu klik **Simpan Password**.
-* **Hapus Akun**: Klik **Hapus** lalu **Konfirmasi Hapus** untuk menghapus akun beserta seluruh riwayat BCT dan proyek tersimpannya di database secara permanen (sistem melindungi akun Admin yang sedang aktif agar tidak terhapus sendiri).
+> **Referensi Visual Lengkap Setiap Halaman & State:**  
+> Lihat [`docs/VISUAL-STATE-CATALOG.md`](./VISUAL-STATE-CATALOG.md) untuk tangkapan layar asli Desktop (`1440×900`) dan Mobile (`390×844`) dari seluruh layar, sub-tab, modal, dan konsol admin.
 
 ---
 
-## 2. Navigasi Responsif Multi-Layar, Focus Mode & Mobile Landscape
+## 1. Gerbang Akses Privat, Pemulihan Darurat & Verifikasi WhatsApp
 
-**DieCut.Room** beradaptasi otomatis pada desktop lebar, laptop kompak, tablet, smartphone portrait, hingga smartphone landscape:
+Saat pertama kali membuka aplikasi, sistem menampilkan layar **AuthGate** bergaya *Halftone Offset-Sheet* (kartu putih matte bersudut tajam `2px` di atas kanvas matriks titik gelap interaktif).
 
-* **Auto-Minimize Berdasarkan Ukuran Layar**:
-  * **Desktop (`>= 1280px`)**: Panel Spesifikasi/Pallet kiri dan panel BCT Pro kanan terbuka penuh berdampingan.
-  * **Laptop Kompak (`1024–1279px`)**: Panel BCT Pro kanan otomatis diminimalkan menjadi laci (*overlay*) agar kanvas CAD tetap lega.
-  * **Tablet & Smartphone (`< 1024px`)**: Kedua panel samping otomatis diminimalkan agar kanvas 2D/3D langsung memenuhi layar.
-* **Tombol Minimalkan Langsung & Handle Tepi**: Setiap header panel kiri/kanan dilengkapi tombol tutup/minimalkan langsung (`PanelLeftClose` / `PanelRightClose`), ditambah pegangan cepat mengambang di tepi kiri/kanan saat panel tertutup.
-* **Focus Mode 1-Klik (`F` / `Esc`)**: Klik tombol **Fokus** (atau tekan tombol `F` pada keyboard) untuk menyembunyikan seluruh panel dan bar header agar kanvas 2D/3D maksimal. Tekan `Esc` atau klik **Keluar Fokus** di pojok kanan atas untuk kembali.
-* **Mobile Portrait & Header Adaptif (`···`)**: Pada smartphone portrait, aksi sekunder (*Proyek*, *Users*, *Install PWA*, *Logout*) diringkas ke menu `···`, sementara di bagian bawah muncul **Mobile Floating Thumb Dock** (`Specs / Pallet | BCT | Fokus`).
-* **Smartphone Landscape Pendek (`tinggi <= 500px`)**: Dock mengambang tengah disembunyikan otomatis agar tidak menutupi objek 3D; tombol kontrol dipindah ke header dan panel bawah 3D/Palletizer berubah menjadi **bar mengambang super tipis 1 baris**.
-
----
-
-## 3. Alur Kerja 2D Dieline CAD (Sidebar Kiri)
-
-### Tab `Structure`
-1. **Box Style (FEFCO)**:
-   * `0201 (RSC)`: Regular Slotted Container — flap atas dan bawah bertemu di tengah (`W/2`).
-   * `0200 (HSC)`: Half Slotted Container — kotak terbuka di atas (hanya flap bawah).
-   * `0202 (OSC)`: Overlap Slotted Container — flap luar bertumpuk sejauh `Flap overlap (mm)`.
-   * `0203 (FOL)`: Full Overlap Slotted — flap luar selebar penuh `W` untuk kekuatan tumpuk maksimum.
-   * `0204 (CSSC)`: Center Special Slotted Container — flap dalam (`L/2`) dan luar (`W/2`) bertemu rata tanpa celah tengah.
-2. **Dimension Mode (`Product fit` vs `Box ID`)**:
-   * Mode **Product fit** menghitung Dimensi Dalam (`ID`) otomatis dari ukuran produk ditambah toleransi preset (`Snug +2/+2/+0.5 mm`, `Standard +4/+4/+2 mm`, `Protective +12/+12/+10 mm`, atau `Custom`).
-   * Tombol cepat **Snap 0.5mm Headspace** langsung mengatur clearance tinggi menjadi `0.5 mm` untuk meminimalkan guncangan vertikal produk.
-3. **Corrugated Board & Wall**:
-   * Pilih `Single Wall` (`F`, `E`, `B`, `C`, `A`) atau `Double Wall` (`EB`, `BC`, `AB`, `AA`). Ketebalan flute otomatis tersinkron dengan kalkulator BCT Pro di sidebar kanan.
-4. **Advanced CAD Rules**:
-   * Atur `Glue flap`, `Slot gap`, `Flap gap`, kompensasi sudut `Fishtail`, serta opsi pengurangan kedalaman efektif akibat ketebalan lipatan flap dalam (`Compensate inner flap depth`).
-
-### Tab `Features`
-1. **Pre-Press Print Boundaries**:
-   * Atur `Print bleed` (`0–15 mm`), `Score safe zone` (`2–25 mm`), arah gelombang kertas (**Vertical (Load)** vs **Horizontal**), serta zona bebas tinta pada glue flap (`Glue flap no-ink zone`).
-2. **Perforation & Cutouts (13 Template + Dash / Non-Dash)**:
-   * **Kategori SRP Supermarket**: *SRP Angled Hood Tear*, *Drop-Front PDQ Tray* (dengan crease engsel merah pada bibir retainer bawah), *Twin-Zipper Front Window*, *Split-Tray Twin-Pack*.
-   * **Kategori Shelf-Tray & Scoop**: *Stepped Shelf-Tray + U-Scoop*, *Front Display Window*, *U-Scoop Retail Picker*, *Lower Tray Wrap-Around*.
-   * **Kategori Logistics & Vent**: *Horizontal Tear Strip*, *Courier Zipper Rule*, *Thumb Hole Punch*, *Side Carry Handles*, *Airflow Ventilation Slots*.
-   * **Rule Style (Dash / Non-Dash)**: `Solid Cut (Non-Dash)` (`0/0 mm`), `Fine Perf (6/3 mm)`, `Standard SRP (5/3 mm)`, `Heavy Duty (4/4 mm)`, atau `Custom (Cut / Tie mm)`.
-3. **GS1 ITF-14 Barcode**:
-   * Validasi panjang 14 digit dan **check digit Modulo-10** otomatis + tombol koreksi (`Auto-fix`), serta pemilihan panel (`L1`, `W1`, `L2`, `W2`).
-
-### Tab `Metadata`
-* Mengisi kolom Title Block produksi: *Product Name*, *Substance* (sinkron dua arah dengan komposisi lapisan di BCT Pro), *Ink Colors* & *Color Codes*, *Operator*, *QA Signee*, *Date*, dan *Notes*.
+### State yang Tersedia pada `AuthGate`
+1. **Masuk (`Login`)**: Login menggunakan email & password terdaftar. Mendukung sesi ganda (*HttpOnly Partitioned Cookie* + *Bearer Token*) agar tetap stabil di browser modern maupun PWA.
+2. **Daftar (`Register`)**: Isi *Nama*, *Perusahaan*, *Email*, dan *Password*. Akun baru otomatis berstatus **`pending`** sampai diaktifkan oleh Admin.
+3. **Menunggu Persetujuan (`Pending Approval`) & Akun Nonaktif (`Account Disabled`)**: Menampilkan pesan status jelas beserta tombol **Hubungi Admin via WhatsApp** yang otomatis mengisi pesan dengan metadata akses lengkap:
+   - Subdomain/Origin & URL akses lengkap
+   - Referrer, ringkasan OS & browser
+   - Mode tampilan (`Standalone PWA` vs `Web Browser`), resolusi layar, dan zona waktu
+4. **Proteksi Brute-Force (`Account Lockout`)**: Percobaan login salah berulang akan mengunci akun sementara (`locked_until`) dan menampilkan banner peringatan waktu tunggu pada form login.
+5. **Pemulihan Darurat Admin Tersembunyi (`Admin Recovery`)**:
+   - Dipicu secara tersembunyi melalui pintasan **`Alt + Shift + R`** (atau **`Ctrl + Shift + Alt + A`**) maupun **mengetuk logo 5× dalam 2,5 detik**.
+   - Menyediakan dua jalur pemulihan sandi Admin:
+     - **SMTP Email OTP**: Mengirim kode OTP 6-digit ke email Admin (dilengkapi *cooldown* 60 detik bila SMTP sudah dikonfigurasi di Konsol Admin).
+     - **Admin Recovery Key**: Reset password langsung menggunakan kunci pemulihan rahasia (`ADMIN_RECOVERY_KEY` atau kunci yang dirotasi di panel Admin).
+   - Sebagai cadangan darurat tingkat server VPS, tersedia juga CLI `npm run admin:reset`.
 
 ---
 
-## 4. Simulasi 3D Fit & Sobek Perforasi SRP
+## 2. Konsol Admin 4-Tab (`AdminUsersModal`)
 
-Masuk melalui tab mode **3D** di header atas:
-* **Kapsul Preset Kamera POV (Pojok Kanan Atas Kanvas)**: Tombol cepat `Iso`, `Front`, `Top`, `Side`, dan `Reset (↺)` dengan transisi kamera teredam halus (berhenti otomatis bila user menyeret orbit secara manual), terpisah bersih dari kontrol lipatan bawah.
-* **Panel Pojok Kiri Atas (*SRP & Cavity Clearance*)**:
-  * Menampilkan `Box inner (ID)`, kelonggaran sisi (`Side clearance L/W`), `Top headspace`, serta persentase pengisian volume (`Volume fill %`).
-  * **Simulasi Tear / Open SRP (`0–100%`)**: Muncul otomatis saat *Perforation & Cutouts* aktif. Geser slider ringkas (`64px` aman batas kartu di mobile vertikal) atau klik **Peel / Open SRP** untuk melihat animasi 3D nyata sesuai jenis template.
-* **Dock Bawah (Tombol `H` untuk sembunyikan/tampilkan)**:
-  * **Fold (`0–100%`)** dengan slider ringkas `64px` anti-tembus border dan preset `Flat`, `Open`, `Closed` untuk memutar lipatan seluruh panel dinding serta flap atas/bawah.
-  * **X-Ray fit** untuk transparansi karton guna memeriksa batas dalam produk dan volume headspace.
-  * Pada layar smartphone landscape pendek, dock otomatis menyusut menjadi **bar mengambang super tipis** agar ruang pandang 3D tetap lega.
+Akun berstatus **`admin`** melihat tombol **Admin** pada bilah atas (juga dapat dibuka dengan pintasan `Ctrl + Shift + A` / `Cmd + Shift + A`). Konsol ini terdiri dari **4 tab utama**:
 
----
-
-## 5. Palletizer Pro 3D & Smart Advisor
-
-Masuk melalui tab mode **Palletizer** di header atas untuk menyusun Master Carton di atas palet secara real-time:
-* **Konfigurasi Palet & Case-Pack**: Pilih standar palet (`EUR 1200×800`, `ISO 1200×1000`, `US GMA 48×40 in`, atau `Custom`), tinggi susun maksimum, serta **Case-Pack Solver** yang menghitung kombinasi optimal jumlah produk per karton beserta ketebalan sekat (*divider*) dan *bulge allowance*.
-* **Evaluasi Pola Tumpukan & Fisika Stabilitas**: Bandingkan pola *Interlock*, *Column Stack*, *Pinwheel*, *Split*, dan *Hybrid* lengkap dengan metrik efisiensi area/volume, pergeseran gesek permukaan karton, ketahanan kelembaban gudang, dan saran dimensi kotak (**Perfectionist Size Tuning**).
-* **Kontrol 3D Terpadu**: Dilengkapi kapsul POV kamera sudut kanan atas, overlay visibilitas (*Fault lines*, *X-Ray*, *Labels*), serta mode bar tipis di smartphone landscape.
+1. **Tab 1 — `Pengguna & Sesi`**:
+   - Melihat statistik akun (`Active`, `Pending`, `Disabled`), metadata akses asal (`Origin`, `Device`, `Last IP`), jumlah proyek tersimpan, dan riwayat BCT per pengguna.
+   - **Buat Akun Baru (`Create User`)**, **Edit Profil/Peran (`Edit User`)**, **Aktivasi Massal (`Bulk Approve Pending`)**, **Ubah Status (`Active/Disabled`)**, **Reset Password User**, **Cabut Sesi Paksa (`Revoke Sessions` via `token_version`)**, dan **Hapus User**.
+2. **Tab 2 — `Kesehatan & Prediksi` (*Health Radar*)**:
+   - Menampilkan telemetri server secara langsung: penggunaan **RAM RSS vs batas memori**, ukuran file database **SQLite WAL**, *uptime* server, dan peringatan prediktif postur keamanan/kapasitas lengkap dengan tombol loncat cepat ke tab terkait.
+3. **Tab 3 — `Log Audit`**:
+   - Menampilkan linimasa terfilter seluruh peristiwa keamanan (*login*, *lockout*, perubahan status/password, rotasi kunci, *backup*) dengan label keparahan (`info`, `warn`, `critical`), aktor, target, dan IP klien.
+4. **Tab 4 — `Keamanan & Backup`**:
+   - **Ganti Password Admin** sendiri secara aman.
+   - **Rotasi Admin Recovery Key** langsung dari UI.
+   - **Konfigurasi & Uji SMTP Email OTP** (Host, Port, TLS, User, Pass, From + tombol kirim email uji).
+   - **Manajemen Kunci Hermes Agent REST & MCP (`X-Agent-Key`)**: Menerbitkan, merotasi, atau mencabut kunci integrasi untuk `/api/agent/*` dan `/api/mcp`.
+   - **Unduh Backup Database**: Ekspor salinan konsisten langsung berupa file **SQLite `.db`** (via `VACUUM INTO`) atau snapshot **JSON**.
 
 ---
 
-## 6. Ekspor Dieline 2D, Proyek Tersimpan & BCT Pro
+## 3. Ruang Kerja Utama — Panel Specs (3 Tab) & 2D Die-Line CAD
 
-* **Toolbar Workspace 2D**: Zoom/Fit + geser kanvas (*Pan*) dan toggle layer (*Dimensions*, *Product Fit*, *ITF-14 Barcode*, *Title Block*, *Grid*, *Print Bleed*, *Score Safe Zone*, *Glue Knockout*, *Flute Grain*).
-* **Mode Ekspor SVG / PDF (`1:1 mm`)**:
-  * `Spec Sheet`: Ekspor gambar teknik lengkap Title Block, legenda garis, dimensi, barcode, dan overlay pre-press.
-  * `Clean CAD`: Ekspor **hanya** layer vektor produksi (`LAYER_CUT`, `LAYER_CREASE`, `LAYER_PERFORATION`, plus `LAYER_BARCODE` jika aktif) skala tepat **1:1 mm** untuk **Adobe Illustrator**, **CorelDRAW**, atau plotter/die-cutter.
-* **Proyek Tersimpan (`Proyek` di Header)**: Simpan seluruh konfigurasi ukuran, FEFCO, perforasi, pre-press, dan komposisi kertas BCT Anda ke SQLite VPS, lalu muat kembali dari perangkat lain.
-* **BCT Pro Sidebar Kanan & Pre-Flight (`Pre-flight` / `Stack kgf`)**: Pilih metode `TAPPI / ISO` vs `BCT Pro Legacy`, simulasi *Print Coverage* per panel, simpan riwayat ke VPS, dan jalankan **8 aturan audit produksi** lengkap dengan **1-Click Auto-Fix**.
+Workspace utama menampilkan 3 zona adaptif: **Panel Specs** di kiri, **Kanvas 2D/3D/Palletizer** di tengah, dan **Panel BCT Pro** di kanan.
+
+### Pengaturan Satuan & Tampilan Responsif
+- **Switcher 3 Unit (`mm` / `cm` / `in`)**: Berada di header panel Specs; seluruh dimensi L×W×H dikonversi otomatis secara presisi sambil mempertahankan presisi internal CAD `1:1 mm`.
+- **4-Tier Responsive Workspace**:
+  - `Desktop (≥1280px)`: Tiga kolom terbuka penuh.
+  - `Compact (1024–1279px)`: Panel BCT Pro otomatis diperkecil agar kanvas tetap lega.
+  - `Tablet (768–1023px)` & `Mobile (<768px)`: Panel Specs/Pallet & BCT Pro tampil sebagai *slide-over drawer* melalui **Mobile Floating Thumb Dock** di sisi bawah.
+  - **Focus Mode (`F` / `Esc`)**: Menyembunyikan panel samping & footer dalam 1 klik untuk area kerja layar penuh.
+
+### 3 Sub-Tab Panel Specs (`Sidebar.tsx`)
+1. **Tab `Structure`**:
+   - Pilihan standar **FEFCO** (`0200 HSC`, `0201 RSC`, `0202 OSC`, `0203 FOL`, `0204 CSSC`).
+   - Mode dimensi **`Direct ID`** (input langsung dimensi dalam dus) vs **`Product fit`** (input ukuran produk + preset clearance *Snug*, *Standard E-Commerce*, *Protective*, atau *Custom per-axis* untuk mencegah *headspace*).
+   - Pemilihan warna permukaan (*Kraft Brown* vs *Bleached White*), konstruksi dinding (*Single Wall* `F/E/B/C/A` vs *Double Wall* `EB/BC/AB/AA`), posisi *Glue Joint* (*Left* vs *Right*).
+2. **Tab `Pre-press`**:
+   - Batas cetak (*Print bleed*, *Score safe zone*), arah gelombang flute (*Vertical Load* vs *Horizontal*), serta *Glue flap no-ink knockout zone*.
+   - **Perforation & Cutouts (13 Pola SRP Supermarket)**: Switch aktif untuk 13 pola *Shelf-Ready Packaging* & pegangan logistik (*Angled Hood*, *Drop-Front PDQ*, *Twin-Zipper*, *Split-Tray*, *Stepped Shelf-Tray + U-Scoop*, *Tear Strip*, *Carry Handles*, dll.) dengan aturan **Solid Cut (Non-Dash)** vs **Perforation Rules** (`6/3`, `5/3`, `4/4 mm`, atau kustom `cut/tie`).
+3. **Tab `Title block`**:
+   - Identitas gambar teknik (*Drawing title*, *Client*, *Part/SKU*, *Revision*), kode batang **GS1 ITF-14** (dengan validasi & *auto-fix* digit cek Modulo-10), serta catatan material untuk lembar produksi.
+
+### Kanvas 2D Die-Line CAD (`BoxPreview.tsx`)
+- Mendukung *pan & zoom* interaktif, *toggle* visibilitas layer (*Cut*, *Crease*, *Perforation*, *Bleed*, *Safe Zone*, *Glue Knockout*, *Dimensions*, *Product Fit*, *ITF-14*).
+- Ekspor presisi **1:1 mm** ke **SVG** dan **PDF** (pilihan *Clean CAD* untuk mesin potong/plotter maupun *Spec Sheet* lengkap dengan *title block*).
+
+---
+
+## 4. Simulator 3D Fit & Interactive SRP Tear (`Box3DViewer.tsx`)
+
+Beralih ke tab **`3D`** pada bilah atas untuk inspeksi struktural tiga dimensi:
+- **Preset & Slider Lipat (`0–100%`)**: Tombol cepat **`Flat`**, **`Open`**, **`Closed`** serta slider ringkas `64px` untuk memantau lipatan flap, celah sudut, dan kesesuaian produk di dalam dus.
+- **Mode `X-Ray`**: Mengaktifkan transparansi dinding karton agar celah produk (*cavity clearance*) terlihat jelas dari segala sisi.
+- **Simulasi Sobekan SRP (`Peel` / `Reset`, `0–100%`)**: Aktif otomatis bila *Perforation & Cutouts* dihidupkan pada tab `Pre-press`, mensimulasikan proses pengelupasan/sobekan boks menjadi baki pajang ritel.
+- **Kapsul Kamera POV & Short-Landscape HUD**: Kapsul kanan-atas (`Iso / Front / Top / Side`) dan bilah kontrol mengambang otomatis pada layar lanskap pendek (`height ≤ 500px`).
+- **Pemulihan WebGL Otomatis**: Jika GPU browser memutus konteks WebGL (`webglcontextlost`), overlay pemulihan muncul sehingga viewport 3D bisa diaktifkan kembali tanpa kehilangan data desain.
+
+---
+
+## 5. Palletizer Pro 3D & Export Laporan PDF A4 (`PalletizerWorkspace.tsx`)
+
+Beralih ke tab **`Pallet`** untuk optimasi pemuatan palet secara *real-time* (didukung *Web Worker* agar UI tetap mulus):
+
+1. **Konfigurasi Palet & Case-Pack Solver**:
+   - Preset standar palet (`ISO 1200×1000`, `EUR 1200×800`, `US 1219×1016`, atau `Custom`), batas tinggi & bobot maksimum, serta pemecah *Case-Pack*.
+   - Evaluasi otomatis berbagai pola susunan (*Interlock*, *Column*, *Pinwheel*, *Split*, *Hybrid*) lengkap dengan skor efisiensi area, volume, dan stabilitas gesekan/kelembapan.
+   - **Perfectionist Size Tuning & Board Advice**: Banner rekomendasi interaktif untuk penyesuaian milimeter dimensi dus atau kenaikan spesifikasi papan demi efisiensi palet & keselamatan BCT.
+2. **Mode Inspeksi 3D**:
+   - **Normal Stack View**: Visualisasi tumpukan lengkap dengan toggle tampilan *Kraft/White* dan *X-Ray*.
+   - **Mode `Heat-Map` (*Lock Heat-Map*)**: Mewarnai setiap karton berdasarkan status penguncian antar-layer (Hijau = terkunci silang kuat, Kuning = kolom 1:1 / marginal, Merah = sudut menggantung / *fault line*), lengkap dengan penanda sudut tak tertopang dan **Mini-Blueprint Overlap Layer 1 vs Layer 2**.
+   - **Slider `Inspect Layer` (`Lyr 1..N`)**: Mengisolasi tumpukan hingga layer tertentu untuk memeriksa penempatan dus per tingkat.
+3. **Export Laporan Engineering PDF A4 (2 Halaman Orthographic)**:
+   - Klik **`Export PDF`** untuk membuka modal pengaturan ekspor dan mengunduh dokumen A4 2 halaman bergaya **Precision Tactile Studio** dengan header kiri **`DIBUAT OLEH APLIKASI DIECUT.ROOM`** dan logo resmi **Totale.Room** di sisi kanan:
+     - **Halaman 1**: Ringkasan spesifikasi proyek, konfigurasi palet, metrik kapasitas/bobot/efisiensi, dan tabel *Case-Pack*.
+     - **Halaman 2**: **4 POV Orthographic Normal** (`Iso` sudut curam ~40°, `Top` penuh tanpa terpotong, `Front`, `Side`) dengan pewarnaan kontras orientasi `0°` vs `90°` + outline tegas + dimensi vektor `L × W × T`, panel **Heat-Map (Iso & Top)**, serta panduan 2D **Layer 1 & Layer 2** bernomor untuk operator gudang.
+
+---
+
+## 6. Panel BCT Pro & Audit Struktural (`BCTInspectorRail.tsx` — 4 Sub-Tab)
+
+Panel kanan mengevaluasi kekuatan tekan boks (*Box Compression Test*) secara langsung terhadap spesifikasi papan saat ini, dengan switcher satuan **`kgf` / `lbf`**:
+
+1. **Tab `Calc` (Kalkulator BCT)**:
+   - Pemilih mesin rumus **`TAPPI / ISO Calibrated`** vs **`BCT Pro Legacy`**.
+   - Pemilihan komposisi kertas 3-ply / 5-ply (hingga **K300**, *White Top Kraft*, *Testliner*, *Semi-Chem* medium), *custom RCT override*, simulasi penurunan akibat persentase cetak tinta per panel (*Print Coverage*), serta 5 faktor koreksi lingkungan (*kelembapan*, *durasi penyimpanan*, *pola tumpuk*, *handling*, *overhang*).
+   - Menampilkan nilai BCT akhir, *Safe Stacking Load*, dan status keamanan (`AMAN` / `MARGINAL` / `KRITIS`).
+2. **Tab `Audit` (Diagnostik & Board Upgrade Advisor)**:
+   - Menjelaskan faktor penurun kekuatan terbesar dan menawarkan rekomendasi naik grade papan 1-klik bila status BCT belum memenuhi target tumpukan.
+3. **Tab `Hist` (Riwayat Skenario Tersimpan)**:
+   - Menyimpan, membandingkan, dan memuat kembali snapshot perhitungan BCT per akun yang tersinkronisasi di database SQLite server (`/api/history`).
+4. **Tab `Cmp` (Perbandingan Multi-Grade)**:
+   - Membandingkan performa BCT, ketebalan, dan estimasi bobot lintas kombinasi flute dan grade kertas secara berdampingan.
+
+---
+
+## 7. Modal Operasional — Pre-Flight Engineering Sheet & Saved Projects
+
+1. **Pre-Flight Engineering Sheet (`EngineeringSheet.tsx`)**:
+   - Dibuka melalui tombol **`Pre-Flight`** di bilah atas.
+   - Menjalankan **8 aturan audit produksi CAD** (clearance produk, rasio flap, validitas ITF-14, zona bebas tinta glue flap, aturan Rule 8 SRP, keselamatan BCT, dll.), menyediakan tombol **1-Klik Auto-Fix**, serta rincian estimasi luas blanko, limbah potong (*waste*), dan kalkulasi biaya batch (*costing*).
+2. **Saved Box Projects (`ProjectsModal.tsx`)**:
+   - Dibuka melalui tombol **`Projects`** di bilah atas.
+   - Menyimpan seluruh konfigurasi `BoxConfig` ke akun masing-masing di server (`/api/projects`), memuat kembali proyek lintas perangkat, menghapus proyek lama, atau menampilkan *empty state* bersih saat belum ada proyek tersimpan.

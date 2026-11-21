@@ -47,6 +47,7 @@ Checks performed (zero node_modules required):
   4. Runtime Env Drift   : Scans process.env.* in server.ts vs .env.example & docs/STATUS.md
   5. Scripts & Docker    : Scans package.json scripts vs docs/STATUS.md and verifies scripts/admin-reset.ts in Dockerfile
   6. Codebase Index      : Verifies docs/CODEBASE_INDEX.md matches current code (run 'npm run index:build' to refresh)
+  7. Visual Snapshots    : Verifies docs/VISUAL-STATE-CATALOG.md links valid PNGs in docs/visual-snapshots/ & checks public asset hygiene
 
 Options:
   --strict   Exit with code 1 if any FAIL drift is detected
@@ -334,6 +335,94 @@ function checkCodebaseIndexFreshness(): DriftCheckResult {
   }
 }
 
+function checkVisualSnapshotsIntegrity(): DriftCheckResult {
+  const catalogPath = 'docs/VISUAL-STATE-CATALOG.md';
+  const catalog = readText(catalogPath);
+  if (!catalog) {
+    return {
+      name: '7. Visual State Catalog & Snapshots',
+      status: 'FAIL',
+      summary: `${catalogPath} is missing.`,
+      details: ['Create docs/VISUAL-STATE-CATALOG.md and run npm run snapshots:capture.'],
+    };
+  }
+
+  const imgRegex = /!\[[^\]]*\]\(\.\/(visual-snapshots\/[^)\s]+\.png)\)/g;
+  const refs = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = imgRegex.exec(catalog)) !== null) {
+    refs.add(m[1]);
+  }
+
+  const issues: string[] = [];
+  const warnings: string[] = [];
+
+  if (refs.size === 0) {
+    issues.push('No ./visual-snapshots/*.png image links found in docs/VISUAL-STATE-CATALOG.md.');
+  }
+
+  for (const rel of Array.from(refs).sort()) {
+    const full = path.join(ROOT, 'docs', rel);
+    if (!fs.existsSync(full)) {
+      issues.push(`Missing snapshot referenced in catalog: docs/${rel}`);
+      continue;
+    }
+    const stat = fs.statSync(full);
+    if (stat.size < 5_000) {
+      issues.push(`Snapshot looks empty/corrupt (${stat.size} bytes): docs/${rel}`);
+      continue;
+    }
+    // Check PNG magic header (89 50 4E 47)
+    const fd = fs.openSync(full, 'r');
+    const hdr = Buffer.alloc(4);
+    fs.readSync(fd, hdr, 0, 4, 0);
+    fs.closeSync(fd);
+    if (hdr[0] !== 0x89 || hdr[1] !== 0x50 || hdr[2] !== 0x4e || hdr[3] !== 0x47) {
+      issues.push(`Invalid PNG signature in docs/${rel}`);
+    }
+  }
+
+  // Check official production logo exists and flag stray discussion uploads as warning
+  const logoRel = 'public/assets/aistudio/Asset_2_5ca58983.svg';
+  if (!fs.existsSync(path.join(ROOT, logoRel))) {
+    issues.push(`Missing official production brand logo: ${logoRel}`);
+  }
+  const assetsDir = path.join(ROOT, 'public', 'assets', 'aistudio');
+  if (fs.existsSync(assetsDir)) {
+    const extras = fs.readdirSync(assetsDir).filter((f) => f !== 'Asset_2_5ca58983.svg');
+    if (extras.length > 0) {
+      warnings.push(
+        `${extras.length} non-production attachment(s) found in public/assets/aistudio/ (${extras.slice(0, 3).join(', ')}${extras.length > 3 ? ', ...' : ''}).`
+      );
+    }
+  }
+
+  if (issues.length > 0) {
+    return {
+      name: '7. Visual State Catalog & Snapshots',
+      status: 'FAIL',
+      summary: `${issues.length} visual catalog/snapshot integrity issue(s) found.`,
+      details: [...issues, ...warnings],
+    };
+  }
+
+  if (warnings.length > 0) {
+    return {
+      name: '7. Visual State Catalog & Snapshots',
+      status: 'WARN',
+      summary: `All ${refs.size} catalog snapshots are valid PNGs, with ${warnings.length} asset hygiene note(s).`,
+      details: warnings,
+    };
+  }
+
+  return {
+    name: '7. Visual State Catalog & Snapshots',
+    status: 'PASS',
+    summary: `All ${refs.size} referenced visual snapshots are valid PNGs and public/assets/aistudio/ is clean.`,
+    details: [],
+  };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -372,6 +461,7 @@ function main() {
     checkEnvVarDrift(serverSrc!, envExample!, statusDoc!),
     checkScriptsAndDockerParity(pkgRaw!, statusDoc!, dockerfile),
     checkCodebaseIndexFreshness(),
+    checkVisualSnapshotsIntegrity(),
   ];
 
   console.log('=== DieCut.Room Documentation Drift Report ===');

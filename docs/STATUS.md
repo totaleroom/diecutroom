@@ -40,20 +40,22 @@ npm run docs:check -- --strict
 - **CLI Utilities (Node 22+ native TS)**:
   - `scripts/admin-reset.ts` (`npm run admin:reset`) — pemulihan darurat password/recovery key Admin langsung ke SQLite.
   - `scripts/generate-codebase-index.ts` (`npm run index:build`) — generator indeks simbol, rentang baris file besar, & peta 43 endpoint ke `docs/CODEBASE_INDEX.md`.
-  - `scripts/check-docs-drift.ts` (`npm run docs:check`) — detektor drift dokumentasi & indeks tanpa dependensi.
+  - `scripts/check-docs-drift.ts` (`npm run docs:check`) — detektor drift dokumentasi, indeks & katalog visual (7 cek) tanpa dependensi.
+  - `scripts/capture-visual-snapshots.ts` (`npm run snapshots:capture`) — perekam 27 tangkapan layar asli Desktop (`1440×900`) & Mobile (`390×844`) via Chromium headless CDP ke `docs/visual-snapshots/`.
 
 ---
 
 ## 3. Visual Design System Anchor
 
 - **Kontrak Visual Root**: [`DESIGN.md`](../DESIGN.md) *(otomatis dibaca oleh AI app builders: Vercel/v0, Lovable, Cursor, ADE Antigravity, Codex, Claude)*.
+- **Katalog Visual Live (`Ground Truth`)**: [`docs/VISUAL-STATE-CATALOG.md`](./VISUAL-STATE-CATALOG.md) *(21 tangkapan layar asli Desktop `1440×900` + 6 Mobile `390×844` di `docs/visual-snapshots/`, direkam otomatis via `npm run snapshots:capture`)*.
 - **Design Skill Kanonis**: `.agents/skills/tactile-design/SKILL.md` *(satu-satunya sumber skill; duplikasi lama `agent/skills/` telah dihapus)*.
 - **Design Tokens**: `src/index.css` (**Precision Tactile Studio** — `--root-ink-12: #17191F`, `--root-ink-11: #474D58`, `--root-ink-10: #5C626E`, `--root-ink-6: #CDD2DB`, `--root-ink-3: #ECEEF1`, `--root-ink-2: #F4F5F7`, `--accent-9: #4F46E5`).
 - **UI Primitives**: `src/components/tactile/TactileUI.tsx`.
 - **Auth Portal**: `src/components/AuthGate.tsx`, `src/components/HalftoneSheetDecor.tsx`, `src/components/InteractiveMatrixCanvas.tsx` (kartu offset-sheet matte bersudut tajam `2px`).
 - **Tipografi & Aset**:
   - Font opsional berlisensi: `public/fonts/TimelessGrotesk*.woff2` (fallback `Plus Jakarta Sans` + `JetBrains Mono`).
-  - Logo produksi resmi: `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room, dirender di header kanan laporan PDF Palletizer). Lampiran PDF/PNG lain di `public/assets/aistudio/` adalah referensi diskusi/audit, bukan aset runtime aplikasi.
+  - Logo produksi resmi: `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room, satu-satunya berkas produksi di folder tersebut setelah 26 lampiran diskusi lama dibersihkan).
 
 ---
 
@@ -74,7 +76,7 @@ npm run docs:check -- --strict
 | **Hermes Agent REST API (`/api/agent/*`) & MCP Server (`/api/mcp`)** | `IMPLEMENTED` | `server.ts` (calculate, dieline 2D SVG/Clean CAD, signed download, JSON-RPC MCP) |
 | **PWA Workbox + Chunk Load Error Recovery** | `IMPLEMENTED` | `vite.config.ts`, `index.html`, `src/utils/lazyWithRetry.ts` |
 | **Split-Deploy & Astro Hub Subdomain Readiness (`VITE_API_BASE_URL` + CORS Allowlist)** | `IMPLEMENTED` | `src/utils/apiSession.ts`, `src/utils/fontLoader.ts`, `src/components/AuthGate.tsx`, `server.ts`, `vercel.json` |
-| **Automated Codebase Index & Docs Drift Guard** | `IMPLEMENTED` | `DESIGN.md`, `docs/CODEBASE_INDEX.md`, `scripts/generate-codebase-index.ts`, `scripts/check-docs-drift.ts`, `.github/workflows/docs-drift.yml` |
+| **Automated Codebase Index, Visual Catalog & Docs Drift Guard** | `IMPLEMENTED` | `DESIGN.md`, `docs/VISUAL-STATE-CATALOG.md`, `docs/CODEBASE_INDEX.md`, `scripts/generate-codebase-index.ts`, `scripts/capture-visual-snapshots.ts`, `scripts/check-docs-drift.ts`, `.github/workflows/docs-drift.yml` |
 | **Automated Unit / E2E Test Suite (`npm test`)** | `NOT PRESENT` | Tidak ada test runner di `package.json`; verifikasi via `npm run lint`, `npm run build`, & `npm run docs:check -- --strict` |
 
 ---
@@ -89,7 +91,7 @@ npm run docs:check -- --strict
 5. `audit_logs` — jejak audit login, lockout, perubahan status/password, backup, dan rotasi kunci
 
 ### Skrip `package.json`
-- `dev` (`tsx server.ts`) · `build` (`vite build`) · `start` (`node server.ts`) · `preview` (`vite preview`) · `clean` (`rm -rf dist server.js`) · `lint` (`tsc --noEmit`) · `admin:reset` (`node scripts/admin-reset.ts`) · `docs:check` (`node scripts/check-docs-drift.ts`) · `index:build` (`node scripts/generate-codebase-index.ts`)
+- `dev` (`tsx server.ts`) · `build` (`vite build`) · `start` (`node server.ts`) · `preview` (`vite preview`) · `clean` (`rm -rf dist server.js`) · `lint` (`tsc --noEmit`) · `admin:reset` (`node scripts/admin-reset.ts`) · `docs:check` (`node scripts/check-docs-drift.ts`) · `index:build` (`node scripts/generate-codebase-index.ts`) · `snapshots:capture` (`node scripts/capture-visual-snapshots.ts`)
 
 ### Variabel Environment Runtime & Build
 - **Core Runtime**: `PORT`, `SQLITE_PATH`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD`, `ADMIN_RECOVERY_KEY`, `TRUST_PROXY`, `MEMORY_LIMIT_MB`, `CORS_ALLOWED_ORIGINS` *(opsional, khusus Split-Deploy)*

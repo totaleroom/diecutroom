@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "admin:reset": "node scripts/admin-reset.ts",
     "docs:check": "node scripts/check-docs-drift.ts",
-    "index:build": "node scripts/generate-codebase-index.ts"
+    "index:build": "node scripts/generate-codebase-index.ts",
+    "snapshots:capture": "node scripts/capture-visual-snapshots.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

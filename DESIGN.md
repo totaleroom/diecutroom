@@ -3,10 +3,11 @@
 This is the product-specific design contract for **DieCut.Room** (part of the **Totale.Room Engineering Suite**). Every AI app builder (Vercel/v0, Lovable, Cursor, ADE Antigravity, Codex, Claude Code) and contributor MUST follow this document before editing or adding UI.
 
 Canonical references:
+- Live Visual State Catalog (21 Desktop + 6 Mobile rendered screenshots): `docs/VISUAL-STATE-CATALOG.md` (`docs/visual-snapshots/`)
 - CSS tokens: `src/index.css`
 - Tactile primitives: `src/components/tactile/TactileUI.tsx`
 - Behavioral & elevation rules: `.agents/skills/tactile-design/SKILL.md`
-- Production brand logo: `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room white vector wordmark)
+- Production brand logo: `public/assets/aistudio/Asset_2_5ca58983.svg` (Totale.Room white vector wordmark — the only production asset in that folder)
 
 ---
 
@@ -79,6 +80,7 @@ Canonical references:
 
 ## 6. Anti-Drift Rules for External AI Builders
 
+- Always inspect [`docs/VISUAL-STATE-CATALOG.md`](./docs/VISUAL-STATE-CATALOG.md) (`docs/visual-snapshots/`, 21 Desktop `1440×900` + 6 Mobile `390×844` authentic live renders) before modifying UI so every screen, modal, and responsive breakpoint stays 100% faithful to production.
 - Never swap Tailwind v4 CSS tokens in `src/index.css` for default shadcn/Lovable/Base44 palettes.
 - Never replace `TactileUI` primitives or `lucide-react` stroke style with mismatched component libraries.
-- Never treat reference screenshots/PDFs in `public/assets/aistudio/` as production UI assets — only `Asset_2_5ca58983.svg` is a production brand asset.
+- `public/assets/aistudio/` has been cleaned to contain **only** `Asset_2_5ca58983.svg` (the official Totale.Room production brand logo); never commit discussion screenshots or temporary reference PDFs there.

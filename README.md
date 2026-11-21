@@ -16,6 +16,7 @@
 
 ## Table of Contents
 
+- [Visual Tour (Live Rendered Screenshots)](#-visual-tour-live-rendered-screenshots)
 - [Core Capabilities](#-core-capabilities)
 - [System & Infrastructure Architecture](#-system--infrastructure-architecture)
 - [Codebase Architecture & Module Map](#-codebase-architecture--module-map)
@@ -26,6 +27,18 @@
 - [Quick Start & Debian VPS Deployment](#-quick-start--debian-vps-deployment)
 - [Typography Drop-In (Timeless Grotesk) & PWA Resilience](#-typography-drop-in-timeless-grotesk--pwa-resilience)
 - [Complete Documentation Index](#-complete-documentation-index)
+
+---
+
+## Visual Tour (Live Rendered Screenshots)
+
+All screenshots below are authentic renders captured directly from the live **DieCut.Room** workstation via `npm run snapshots:capture`. For **all 27 Desktop (`1440×900`) & Mobile (`390×844`) states** — including Auth Recovery, 3 Specs tabs, 3D SRP Tear, Palletizer Heat-Map/Inspect Layer/PDF Modal, 4 BCT Pro tabs, Pre-Flight Sheet, Saved Projects, and the 4-tab Admin Console — open the complete **[`docs/VISUAL-STATE-CATALOG.md`](./docs/VISUAL-STATE-CATALOG.md)**.
+
+| 2D Die-Line CAD + Specs + BCT Pro | 3D Fit & Interactive SRP Tear |
+| :---: | :---: |
+| ![2D CAD Workspace](./docs/visual-snapshots/04-workspace-2d-specs-structure.png) | ![3D SRP Tear](./docs/visual-snapshots/08-workspace-3d-srp-tear.png) |
+| **Palletizer Pro 3D & Lock Heat-Map** | **Halftone Offset-Sheet Auth Portal** |
+| ![Palletizer Heat-Map](./docs/visual-snapshots/10-palletizer-heatmap.png) | ![Auth Portal](./docs/visual-snapshots/01-auth-login.png) |
 
 ---
 
@@ -318,7 +331,8 @@ Verify types, production build, codebase index, and documentation parity:
 npm run lint                   # tsc --noEmit
 npm run build                  # Vite + Workbox PWA bundle -> ./dist
 npm run index:build            # Regenerate docs/CODEBASE_INDEX.md (zero-dep)
-npm run docs:check -- --strict # Zero-dependency Node 22+ docs & index drift audit
+npm run snapshots:capture      # Recapture all 27 Desktop + Mobile live PNGs (Node 22+ CDP)
+npm run docs:check -- --strict # Zero-dependency Node 22+ docs, index & visual drift audit
 npm run admin:reset -- --help  # Emergency Admin password / recovery key CLI
 ```
 
@@ -358,6 +372,7 @@ Detailed operational guides, engineering derivations, API contracts, and runbook
 | Document | Scope |
 | :--- | :--- |
 | **[`DESIGN.md`](./DESIGN.md)** | **Product Visual Contract**: Exact Precision Tactile Studio color tokens, typography, radii, Halftone Offset-Sheet Auth portal, 4-tier responsive rules, and PDF branding for all AI builders. |
+| **[`docs/VISUAL-STATE-CATALOG.md`](./docs/VISUAL-STATE-CATALOG.md)** | **Live Visual Ground Truth (27 PNGs)**: Complete Desktop (`1440×900`) & Mobile (`390×844`) screenshot catalog covering every page, sub-tab, 3D mode, modal, and 4-tab Admin Console so vision agents duplicate the exact UI. |
 | **[`docs/STATUS.md`](./docs/STATUS.md)** | **Certified Single Source of Truth**: `verified_at_commit`, Capability Ledger (`IMPLEMENTED` vs `NOT PRESENT`), entrypoint map, visual design anchor, 5-table SQLite & env summary, and Known Gaps. |
 | **[`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md)** | **Auto-Generated Credit-Saver Index**: Deterministic map of all modules, exported symbols, large-file line anchors, and all 43 Express `/api/*` route line numbers (`npm run index:build`). |
 | **[`AGENTS.md`](./AGENTS.md)** | Universal AI Agent & Debian VPS contract: First-Scan protocol, Truth Order, cross-builder credit-saving rules, Astro Hub subdomain topology, multi-app VPS coexistence rules, and Go-Live proof. |

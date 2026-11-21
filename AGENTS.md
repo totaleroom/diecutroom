@@ -12,10 +12,12 @@ Dokumen ini adalah kontrak kerja wajib bagi setiap **AI Agent** — baik **Codin
    - Baca [`docs/STATUS.md`](./docs/STATUS.md) (Capability Ledger) dan [`docs/CODEBASE_INDEX.md`](./docs/CODEBASE_INDEX.md) (peta file, ekspor simbol, rentang baris file besar, & nomor baris 43 endpoint `/api/*`).
    - **Hemat Kredit/Token**: Jangan membaca file besar (`server.ts`, `PalletizerWorkspace.tsx`, `Box3DViewer.tsx`, `palletizerReportPdf.ts`) secara penuh jika hanya butuh satu fungsi/endpoint — gunakan nomor baris dari `docs/CODEBASE_INDEX.md` untuk bacaan terarah.
    - Jalankan `node scripts/check-docs-drift.ts` (`npm run docs:check`) untuk mendeteksi drift dokumentasi/indeks.
-3. **Visual Design Fidelity Anchor**:
-   - Wajib ikuti [`DESIGN.md`](./DESIGN.md) (kontrak visual produk di root), [`.agents/skills/tactile-design/SKILL.md`](./.agents/skills/tactile-design/SKILL.md), serta [`.agents/rules/project.md`](./.agents/rules/project.md).
+3. **Visual Design Fidelity Anchor (Anti-Improvisation)**:
+   - Wajib ikuti [`DESIGN.md`](./DESIGN.md) (kontrak visual produk di root), [`docs/VISUAL-STATE-CATALOG.md`](./docs/VISUAL-STATE-CATALOG.md) (27 tangkapan layar asli Desktop `1440×900` + Mobile `390×844` di `docs/visual-snapshots/`), [`.agents/skills/tactile-design/SKILL.md`](./.agents/skills/tactile-design/SKILL.md), serta [`.agents/rules/project.md`](./.agents/rules/project.md).
+   - **Agen berkemampuan vision wajib memeriksa `docs/VISUAL-STATE-CATALOG.md`** sebelum mengubah UI agar duplikasi aplikasi 100% identik — jangan membuat gaya atau tata letak versi sendiri.
    - Pertahankan token warna **Precision Tactile Studio** pada `src/index.css` (`#17191F`, `#474D58`, `#5C626E`, `#CDD2DB`, `#ECEEF1`, `#F4F5F7`, `#4F46E5`), primitif `src/components/tactile/TactileUI.tsx`, dan kartu *Halftone Offset-Sheet* `2px`.
-   - Logo resmi produksi **Totale.Room** tersimpan di `public/assets/aistudio/Asset_2_5ca58983.svg`. Lampiran PNG/PDF lain di `public/assets/aistudio/` hanyalah artefak referensi diskusi, bukan aset UI produksi.
+   - Logo resmi produksi **Totale.Room** tersimpan di `public/assets/aistudio/Asset_2_5ca58983.svg` (satu-satunya file produksi di folder tersebut setelah pembersihan lampiran diskusi lama).
+   - Jalankan `npm run snapshots:capture` saat UI berubah signifikan untuk menyegarkan tangkapan layar asli dan lolos Cek 7 `npm run docs:check -- --strict`.
 4. **Cross-Builder Guardrails (Vercel / v0 / Lovable / Base44 / Cursor / ADE)**:
    - **JANGAN menulis ulang backend ke Supabase, Base44 SDK, atau Vercel Serverless SQLite.** Backend aplikasi ini adalah **Express + `node:sqlite` WAL (`server.ts`)** yang berjalan persisten di VPS Debian / Docker.
    - Untuk live bersama **Landing Page Utama Astro (`totaleroom.com`)**, deploy **DieCut.Room** pada **subdomain terpisah (`diecut.totaleroom.com`)** menggunakan salah satu dari 2 jalur resmi:
