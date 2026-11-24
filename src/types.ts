@@ -1059,6 +1059,22 @@ export type PalletStandardId = 'iso2-asia' | 'eur-epal' | 'gma-us' | 'cp-square'
 export type PalletPatternType = 'column' | 'interlock' | 'pinwheel' | 'split-block';
 export type PalletViewOverlayMode = 'normal' | 'lock-heatmap';
 export type PalletLockStatus = 'locked' | 'column' | 'at-risk';
+export type PalletEdgeStatus = 'optimal' | 'flush-risk' | 'excessive-underhang' | 'overhang';
+
+export const PALLET_MARGIN_MIN_MM = -50;
+export const PALLET_MARGIN_MAX_MM = 0;
+
+export const PALLET_MARGIN_PRESETS: Array<{
+  value: number;
+  label: string;
+  hint: string;
+}> = [
+  { value: 0, label: '0 Flush', hint: 'Maks 0 mm (tepat tepi dek · waspada bulge karton)' },
+  { value: -5, label: '-5', hint: 'Inset 5 mm/sisi — gudang kering & efisiensi muat tinggi' },
+  { value: -10, label: '-10 Std', hint: 'Standar aman 10 mm/sisi — anti-senggol & toleransi bulge' },
+  { value: -15, label: '-15 ASRS', hint: 'Ekstra aman 15 mm/sisi — ASRS, kontainer, & dus mudah bulge' },
+  { value: -25, label: '-25 Max', hint: 'Inset 25 mm/sisi — jarak aman besar (cek slip sheet)' },
+];
 
 export interface PalletConfig {
   standardId: PalletStandardId;
@@ -1067,7 +1083,7 @@ export interface PalletConfig {
   palletHeightMm: number;
   maxStackHeightMm: number; // Including pallet height
   maxPalletWeightKg: number;
-  allowedOverhangMm: number; // Per side
+  allowedOverhangMm: number; // Per side: locked [-50, 0] mm (<= 0 = safe underhang / edge setback)
   patternType: PalletPatternType;
   patternAutoMode?: boolean;
   useTierSheets: boolean;
@@ -1208,6 +1224,11 @@ export interface PalletPatternEvaluation {
   footprintW: number;
   overhangL: number;
   overhangW: number;
+  underhangL: number;
+  underhangW: number;
+  effectivePalletL: number;
+  effectivePalletW: number;
+  edgeStatus: PalletEdgeStatus;
   areaEfficiencyPct: number;
   cubeEfficiencyPct: number;
   netLoadKg: number;
@@ -1299,7 +1320,7 @@ export const DEFAULT_PALLET_CONFIG: PalletConfig = {
   palletHeightMm: 150,
   maxStackHeightMm: 1800,
   maxPalletWeightKg: 1000,
-  allowedOverhangMm: 0,
+  allowedOverhangMm: -10,
   patternType: 'interlock',
   patternAutoMode: true,
   useTierSheets: false,

@@ -10,9 +10,12 @@ import {
   EXTENDED_STANDARD_ECT_TABLE,
   FLUTE_SPECS,
   MediumGradeId,
+  PALLET_MARGIN_MAX_MM,
+  PALLET_MARGIN_MIN_MM,
   PalletBoxPlacement,
   PalletCandidateVariant,
   PalletConfig,
+  PalletEdgeStatus,
   PalletFaultLine,
   PalletLockStatus,
   PalletPatternEvaluation,
@@ -57,6 +60,28 @@ function clampMin(val: number, min: number): number {
 }
 
 /**
+ * Enforces Zero-Overhang policy: edge margin is strictly locked to [-50, 0] mm per side.
+ * Negative values create a safe inward setback (underhang) inside the physical pallet deck.
+ */
+export function normalizePalletEdgeMarginMm(raw: number | undefined | null): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return -10;
+  return round1(clamp(raw, PALLET_MARGIN_MIN_MM, PALLET_MARGIN_MAX_MM));
+}
+
+export function computeEffectivePalletDims(
+  palletCfg: Pick<PalletConfig, 'palletLengthMm' | 'palletWidthMm' | 'allowedOverhangMm'>
+): {
+  marginMm: number;
+  effPalletL: number;
+  effPalletW: number;
+} {
+  const marginMm = normalizePalletEdgeMarginMm(palletCfg.allowedOverhangMm);
+  const effPalletL = Math.max(300, round1(palletCfg.palletLengthMm + 2 * marginMm));
+  const effPalletW = Math.max(300, round1(palletCfg.palletWidthMm + 2 * marginMm));
+  return { marginMm, effPalletL, effPalletW };
+}
+
+/**
  * Generates ranked Master Carton ID/OD dimensions from primary product dimensions,
  * bulge allowance, cell dividers, layer pads, and item count.
  */
@@ -64,8 +89,17 @@ export function computeCasePackSolutions(
   cfg: CasePackConfig,
   fluteThickness: number,
   currentNetBoxAreaSqm: number,
-  currentBoardGsm: number
+  currentBoardGsm: number,
+  palletBounds?: Pick<PalletConfig, 'palletLengthMm' | 'palletWidthMm' | 'allowedOverhangMm'>
 ): CasePackSolution[] {
+  const refPalletL = palletBounds?.palletLengthMm ?? 1200;
+  const refPalletW = palletBounds?.palletWidthMm ?? 1000;
+  const { effPalletL: refEffL, effPalletW: refEffW } = computeEffectivePalletDims({
+    palletLengthMm: refPalletL,
+    palletWidthMm: refPalletW,
+    allowedOverhangMm: palletBounds?.allowedOverhangMm ?? -10,
+  });
+  const refPhysArea = Math.max(1, refPalletL * refPalletW);
   const count = Math.max(1, Math.min(200, Math.round(cfg.unitsPerCase || 1)));
   const effUnitL = clampMin(cfg.unitLengthMm + cfg.bulgeL, 8);
   const effUnitW = clampMin(
@@ -162,7 +196,7 @@ export function computeCasePackSolutions(
       const outerW = round1(normW + fluteThickness * 2);
       const outerD = round1(innerD + fluteThickness * 4);
 
-      if (outerL > 1150 || outerW > 950 || outerD > 950) continue;
+      if (outerL > refEffL || outerW > refEffW || outerD > 950) continue;
 
       const key = `${normNx}x${normNy}x${nz}_${normL}x${normW}x${innerD}`;
       if (dedup.has(key)) continue;
@@ -170,10 +204,10 @@ export function computeCasePackSolutions(
       const boxVol = normL * normW * innerD;
       const packingEfficiencyPct = Math.min(100, (unitVolumeMm3 * count * 100) / boxVol);
 
-      const fitA = Math.floor(1200 / outerL) * Math.floor(1000 / outerW);
-      const fitB = Math.floor(1200 / outerW) * Math.floor(1000 / outerL);
+      const fitA = Math.floor(refEffL / outerL) * Math.floor(refEffW / outerW);
+      const fitB = Math.floor(refEffL / outerW) * Math.floor(refEffW / outerL);
       const bestCases = Math.max(fitA, fitB);
-      const palletAreaEstPct = Math.min(100, ((bestCases * outerL * outerW) / (1200 * 1000)) * 100);
+      const palletAreaEstPct = Math.min(100, ((bestCases * outerL * outerW) / refPhysArea) * 100);
 
       const divAreaSqm =
         ((Math.max(0, normNx - 1) * normW * innerD +
@@ -1165,8 +1199,7 @@ function buildAndScoreEvaluation(
   palletPayloadLimitKg: number,
   physicsCtx?: PalletPhysicsContext
 ): PalletPatternEvaluation {
-  const effPalletL = palletCfg.palletLengthMm + 2 * Math.max(0, palletCfg.allowedOverhangMm);
-  const effPalletW = palletCfg.palletWidthMm + 2 * Math.max(0, palletCfg.allowedOverhangMm);
+  const { effPalletL, effPalletW } = computeEffectivePalletDims(palletCfg);
   const boxL = Math.max(30, caseOuterDims.length);
   const boxW = Math.max(30, caseOuterDims.width);
   const boxD = Math.max(30, caseOuterDims.depth);
@@ -1335,6 +1368,22 @@ function buildAndScoreEvaluation(
   const overhangL = Math.max(0, round1((footprintL - palletCfg.palletLengthMm) / 2));
   const overhangW = Math.max(0, round1((footprintW - palletCfg.palletWidthMm) / 2));
   const maxOverhang = Math.max(overhangL, overhangW);
+
+  const underhangL =
+    footprintL > 0 ? Math.max(0, round1((palletCfg.palletLengthMm - footprintL) / 2)) : 0;
+  const underhangW =
+    footprintW > 0 ? Math.max(0, round1((palletCfg.palletWidthMm - footprintW) / 2)) : 0;
+  const minUnderhang = Math.min(underhangL, underhangW);
+  const maxUnderhang = Math.max(underhangL, underhangW);
+
+  const edgeStatus: PalletEdgeStatus =
+    maxOverhang > 0.5
+      ? 'overhang'
+      : minUnderhang < 5
+      ? 'flush-risk'
+      : maxUnderhang > 25
+      ? 'excessive-underhang'
+      : 'optimal';
 
   const seamLockPct = totalUpperCount > 0 ? round1((bridgedUpperCount / totalUpperCount) * 100) : 0;
   const supportedCornerPct =
@@ -1515,9 +1564,24 @@ function buildAndScoreEvaluation(
       `Ketahanan pecah (Burst ${burstStrengthKpa} kPa) mendekati batas beban — perkuat inner liner (hindari Medium 125 di liner dalam).`
     );
   }
+  if (edgeStatus === 'overhang') {
+    recommendations.push(
+      `Ukuran dus tunggal melebihi tepi palet (Overhang L:${overhangL} / W:${overhangW} mm/sisi) — potensi BCT turun 30–40% & senggolan palet.`
+    );
+  } else if (edgeStatus === 'flush-risk') {
+    recommendations.push(
+      `Tepi tumpukan mepet palet (inset min ${minUnderhang} mm/sisi): saat karton menggembung (bulge 5–15 mm) berisiko keluar tepi & tersenggol — set Margin Tepi -10 s.d. -15 mm.`
+    );
+  } else if (edgeStatus === 'excessive-underhang') {
+    recommendations.push(
+      !palletCfg.useSlipSheet
+        ? `Underhang lebar (L:${underhangL} / W:${underhangW} mm/sisi) tanpa Slip Sheet: sudut karton bawah rawan masuk celah papan dek & stretch wrap mudah robek di sudut palet — aktifkan Bottom Slip Sheet atau jalankan Auto-Tuning ±20mm.`
+        : `Underhang lebar (L:${underhangL} / W:${underhangW} mm/sisi): cek tegangan stretch wrap di tepi kayu & pertimbangkan Auto-Tuning ±20mm untuk efisiensi area lebih baik.`
+    );
+  }
   if (recommendations.length === 0) {
     recommendations.push(
-      `Perfeksionis: 0 garis belah, Lock ${seamLockPct}%, Sudut ${supportedCornerPct}%, Burst ${burstStrengthKpa} kPa, kuat tanpa plakban.`
+      `Perfeksionis: 0 garis belah, Inset aman L:${underhangL}/W:${underhangW} mm, Lock ${seamLockPct}%, Sudut ${supportedCornerPct}%, Burst ${burstStrengthKpa} kPa.`
     );
   }
 
@@ -1533,6 +1597,11 @@ function buildAndScoreEvaluation(
     footprintW,
     overhangL,
     overhangW,
+    underhangL,
+    underhangW,
+    effectivePalletL: effPalletL,
+    effectivePalletW: effPalletW,
+    edgeStatus,
     areaEfficiencyPct,
     cubeEfficiencyPct,
     netLoadKg,
@@ -1866,8 +1935,7 @@ export function computePerfectionistTuningReport(
     [...baseEvals].sort((a, b) => b.stability.smartScore - a.stability.smartScore || b.totalCases - a.totalCases)[0] ||
     baseEvals[0];
 
-  const effL = probeCfg.palletLengthMm + 2 * Math.max(0, probeCfg.allowedOverhangMm);
-  const effW = probeCfg.palletWidthMm + 2 * Math.max(0, probeCfg.allowedOverhangMm);
+  const { effPalletL: effL, effPalletW: effW } = computeEffectivePalletDims(probeCfg);
 
   const scorePerfectionist = (ev: PalletPatternEvaluation) => {
     const st = ev.stability;

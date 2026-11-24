@@ -171,4 +171,13 @@ $$
 * **Case-Pack Solver (`computeCasePackSolutions`)**:
   Memfaktorisasi jumlah unit per karton ($N = n_x \times n_y \times n_z$), mengevaluasi orientasi produk primer (persegi panjang maupun silinder, opsional *upright-only*), lalu menambahkan kelonggaran dinding mengembung (*bulge*), ketebalan sekat (*divider*), dan bantalan lapisan (*layer pad*) untuk menghitung `ID` dan `OD` Master Carton serta efisiensi pemakaian papan karton.
 * **Evaluasi Pola & Stabilitas Palet (`evaluateAllPalletPatterns`)**:
-  Menguji susunan *Interlock*, *Column*, *Pinwheel*, *Split*, dan *Hybrid* terhadap luas palet (termasuk batas *overhang*), tare palet (`22 kg`), koefisien gesek permukaan karton, estimasi ketahanan burst (`Burst kPa`), retensi BCT antar-lapis (*bottom-layer load vs Max Safe Stacking Load*), serta penyelarasan garis patahan (*fault-line interlocking*) antar lapisan ganjil-genap.
+  Menguji susunan *Interlock*, *Column*, *Pinwheel*, dan *Split-Block* terhadap zona efektif palet (**Kebijakan Zero-Overhang & Underhang Aman**), tare palet (`22 kg`), koefisien gesek permukaan karton, estimasi ketahanan burst (`Burst kPa`), retensi BCT antar-lapis (*bottom-layer load vs Max Safe Stacking Load*), serta penyelarasan garis patahan (*fault-line interlocking*) antar lapisan ganjil-genap.
+* **Kebijakan Zero-Overhang & Margin Underhang (`normalizePalletEdgeMarginMm`, `computeEffectivePalletDims`)**:
+  - Rentang margin tepi (`allowedOverhangMm`) dikunci pada **`-50 mm` hingga `0 mm` per sisi** (bawaan **`-10 mm/sisi`**), menghilangkan *overhang* positif agar tidak terjadi senggolan antar-palet, benturan rak/kontainer, maupun penurunan BCT 30–40%.
+  - Zona efektif muat dihitung sebagai $L_{\text{eff}} = \max(300,\ L_{\text{palet}} + 2m)$ dan $W_{\text{eff}} = \max(300,\ W_{\text{palet}} + 2m)$ dengan $m \in [-50, 0]\ \text{mm}$, sedangkan persentase efisiensi area/kubik tetap dihitung secara jujur terhadap luas palet fisik penuh.
+  - **Diagnostik Inset Aktual (`underhangL`, `underhangW`, `edgeStatus`)**:
+    - `optimal` (`5–25 mm/sisi`): Aman dari senggolan tepi & menyediakan ruang toleransi *sidewall bulge* karton.
+    - `flush-risk` (`< 5 mm/sisi`): Peringatan mepet tepi — *bulge* 5–15 mm saat ditumpuk/lembap berisiko mendorong dus melewati tepi dek.
+    - `excessive-underhang` (`> 25 mm/sisi`): Peringatan celah papan dek (menyarankan *Bottom Slip Sheet*), potensi robek *stretch wrap* di sudut kayu, serta saran *Auto-Tuning ±20 mm*.
+    - `overhang` (`> 0.5 mm`): Hanya muncul bila ukuran tunggal 1 dus melebihi dimensi fisik dek palet.
+

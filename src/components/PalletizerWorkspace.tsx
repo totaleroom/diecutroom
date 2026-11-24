@@ -31,6 +31,9 @@ import {
   DielinePaths,
   EngineeringAnalysis,
   FLUTE_SPECS,
+  PALLET_MARGIN_MAX_MM,
+  PALLET_MARGIN_MIN_MM,
+  PALLET_MARGIN_PRESETS,
   PALLET_PRESETS,
   PalletConfig,
   PalletPatternEvaluation,
@@ -43,9 +46,11 @@ import {
 import { computeBoardBurstKpa, computeSurfaceFrictionCoeff } from '../utils/engineering';
 import {
   computeCasePackSolutions,
+  computeEffectivePalletDims,
   computePerfectionistTuningReport,
   computeSmartPalletAdvisor,
   evaluateAllPalletPatterns,
+  normalizePalletEdgeMarginMm,
   PalletPhysicsContext,
   pickOptimalPatternType,
 } from '../utils/palletizer';
@@ -311,8 +316,8 @@ function populatePalletGroup({
     }
   }
 
-  // 2. Pallet Footprint & Allowed Overhang Wireframe Guides
-  const overM = Math.max(0, pallet.allowedOverhangMm) * S;
+  // 2. Pallet Footprint & Safe Underhang Inset Wireframe Guides (Zero-Overhang Policy)
+  const { marginMm, effPalletL, effPalletW } = computeEffectivePalletDims(pallet);
   const deckOutlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(pL, 0.004, pW));
   const hasOverhang = activeEvaluation.overhangL > 0.5 || activeEvaluation.overhangW > 0.5;
   const deckOutline = new THREE.LineSegments(
@@ -324,16 +329,47 @@ function populatePalletGroup({
   deckOutline.position.set(0, pH + 0.002, 0);
   group.add(deckOutline);
 
-  if (overM > 0.002) {
-    const overGeo = new THREE.EdgesGeometry(
-      new THREE.BoxGeometry(pL + 2 * overM, 0.002, pW + 2 * overM)
+  if (marginMm < -0.5) {
+    const effLM = effPalletL * S;
+    const effWM = effPalletW * S;
+    const safeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(effLM, 0.002, effWM));
+    const safeLine = new THREE.LineSegments(
+      safeGeo,
+      new THREE.LineBasicMaterial({ color: '#4F46E5', transparent: true, opacity: 0.85 })
     );
-    const overLine = new THREE.LineSegments(
-      overGeo,
-      new THREE.LineBasicMaterial({ color: '#dc2626', transparent: true, opacity: 0.6 })
-    );
-    overLine.position.set(0, pH + 0.001, 0);
-    group.add(overLine);
+    safeLine.position.set(0, pH + 0.0028, 0);
+    group.add(safeLine);
+
+    // Subtle 4-edge setback band showing protected anti-collision underhang rim on top of deck
+    const bandMat = new THREE.MeshBasicMaterial({
+      color: '#4F46E5',
+      transparent: true,
+      opacity: 0.1,
+      depthWrite: false,
+    });
+    const stripL = Math.max(0.001, (pL - effLM) / 2);
+    const stripW = Math.max(0.001, (pW - effWM) / 2);
+    const yBand = pH + 0.0022;
+
+    const topStrip = new THREE.Mesh(new THREE.PlaneGeometry(pL, stripW), bandMat);
+    topStrip.rotation.x = -Math.PI / 2;
+    topStrip.position.set(0, yBand, -(effWM + stripW) / 2);
+    group.add(topStrip);
+
+    const botStrip = new THREE.Mesh(new THREE.PlaneGeometry(pL, stripW), bandMat);
+    botStrip.rotation.x = -Math.PI / 2;
+    botStrip.position.set(0, yBand, (effWM + stripW) / 2);
+    group.add(botStrip);
+
+    const leftStrip = new THREE.Mesh(new THREE.PlaneGeometry(stripL, effWM), bandMat);
+    leftStrip.rotation.x = -Math.PI / 2;
+    leftStrip.position.set(-(effLM + stripL) / 2, yBand, 0);
+    group.add(leftStrip);
+
+    const rightStrip = new THREE.Mesh(new THREE.PlaneGeometry(stripL, effWM), bandMat);
+    rightStrip.rotation.x = -Math.PI / 2;
+    rightStrip.position.set((effLM + stripL) / 2, yBand, 0);
+    group.add(rightStrip);
   }
 
   // 3. Optional Bottom Slip Sheet
@@ -826,7 +862,15 @@ export default function PalletizerWorkspace({
   focusMode = false,
 }: PalletizerWorkspaceProps) {
   const casePack: CasePackConfig = config.casePack || DEFAULT_CASE_PACK_CONFIG;
-  const pallet: PalletConfig = config.pallet || DEFAULT_PALLET_CONFIG;
+  const rawPallet: PalletConfig = config.pallet || DEFAULT_PALLET_CONFIG;
+  const normalizedMarginMm = normalizePalletEdgeMarginMm(rawPallet.allowedOverhangMm);
+  const pallet: PalletConfig = useMemo(
+    () =>
+      rawPallet.allowedOverhangMm === normalizedMarginMm
+        ? rawPallet
+        : { ...rawPallet, allowedOverhangMm: normalizedMarginMm },
+    [rawPallet, normalizedMarginMm]
+  );
 
   const [railTab, setRailTab] = useState<LeftRailTab>('pallet');
   const [appliedBanner, setAppliedBanner] = useState<string | null>(null);
@@ -847,16 +891,29 @@ export default function PalletizerWorkspace({
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportPdfError, setExportPdfError] = useState<string | null>(null);
 
-  // Solve right-sizing solutions for primary products
+  // Solve right-sizing solutions for primary products synced with effective pallet underhang zone
   const casePackSolutions = useMemo(
     () =>
       computeCasePackSolutions(
         casePack,
         config.fluteThickness,
         analysis.netBoxAreaSqm,
-        analysis.boardGsm
+        analysis.boardGsm,
+        {
+          palletLengthMm: pallet.palletLengthMm,
+          palletWidthMm: pallet.palletWidthMm,
+          allowedOverhangMm: pallet.allowedOverhangMm,
+        }
       ),
-    [casePack, config.fluteThickness, analysis.netBoxAreaSqm, analysis.boardGsm]
+    [
+      casePack,
+      config.fluteThickness,
+      analysis.netBoxAreaSqm,
+      analysis.boardGsm,
+      pallet.palletLengthMm,
+      pallet.palletWidthMm,
+      pallet.allowedOverhangMm,
+    ]
   );
 
   const safePlanIdx = Math.min(
@@ -2153,10 +2210,10 @@ export default function PalletizerWorkspace({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Max Tinggi
+                        Max Tinggi (mm)
                       </label>
                       <TactileInputWell
                         type="number"
@@ -2173,7 +2230,7 @@ export default function PalletizerWorkspace({
                     </div>
                     <div>
                       <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Max Berat kg
+                        Max Berat (kg)
                       </label>
                       <TactileInputWell
                         type="number"
@@ -2188,22 +2245,79 @@ export default function PalletizerWorkspace({
                         }
                       />
                     </div>
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Overhang mm
+                  </div>
+
+                  <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-2.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="pallet-underhang-input"
+                        className="text-[11px] font-medium text-[var(--ink-12)]"
+                      >
+                        Margin Tepi / Underhang (mm/sisi)
                       </label>
-                      <TactileInputWell
-                        type="number"
-                        min={0}
-                        max={80}
-                        step={5}
-                        value={pallet.allowedOverhangMm}
-                        onChange={(e) =>
-                          updatePallet({
-                            allowedOverhangMm: Math.max(0, Math.min(80, Number(e.target.value) || 0)),
-                          })
-                        }
-                      />
+                      <span className="font-mono tabular-nums text-[10px] text-[var(--ink-10)]">
+                        Maks 0 mm
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="w-[84px] shrink-0">
+                        <TactileInputWell
+                          id="pallet-underhang-input"
+                          type="number"
+                          min={PALLET_MARGIN_MIN_MM}
+                          max={PALLET_MARGIN_MAX_MM}
+                          step={5}
+                          value={pallet.allowedOverhangMm}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            updatePallet({
+                              allowedOverhangMm: Number.isFinite(raw)
+                                ? normalizePalletEdgeMarginMm(raw)
+                                : 0,
+                            });
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1 grid grid-cols-5 gap-1">
+                        {PALLET_MARGIN_PRESETS.map((preset) => {
+                          const active = Math.abs(pallet.allowedOverhangMm - preset.value) < 0.1;
+                          return (
+                            <button
+                              key={preset.value}
+                              type="button"
+                              title={preset.hint}
+                              onClick={() => updatePallet({ allowedOverhangMm: preset.value })}
+                              className={`h-[28px] rounded-[var(--radius-sm)] border-[0.5px] font-mono tabular-nums text-[10.5px] font-medium transition-colors cursor-pointer ${
+                                active
+                                  ? 'bg-[var(--ink-12)] text-white border-[var(--ink-12)]'
+                                  : 'bg-[var(--ink-2)] text-[var(--ink-11)] border-[var(--line)] hover:bg-[var(--ink-3)] hover:text-[var(--ink-12)]'
+                              }`}
+                            >
+                              {preset.value === 0 ? '0' : `${preset.value}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] pt-1 border-t-[0.5px] border-[var(--line)]">
+                      <span className="text-[var(--ink-10)] font-mono tabular-nums">
+                        Zona Efektif: {activeEvaluation.effectivePalletL}×{activeEvaluation.effectivePalletW} mm
+                      </span>
+                      <span
+                        className={`font-mono tabular-nums font-medium ${
+                          activeEvaluation.edgeStatus === 'optimal'
+                            ? 'text-[var(--green-11)]'
+                            : activeEvaluation.edgeStatus === 'overhang'
+                            ? 'text-[var(--red-11)]'
+                            : 'text-[var(--amber-11)]'
+                        }`}
+                      >
+                        {activeEvaluation.edgeStatus === 'overhang'
+                          ? `OH +${Math.max(activeEvaluation.overhangL, activeEvaluation.overhangW)}mm`
+                          : `Inset L:${activeEvaluation.underhangL} / W:${activeEvaluation.underhangW} mm`}
+                      </span>
                     </div>
                   </div>
 
@@ -2695,9 +2809,25 @@ export default function PalletizerWorkspace({
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[var(--ink-10)]">Koreksi Pola & Overhang</span>
+                      <span className="text-[var(--ink-10)]">Koreksi Pola &amp; Tepi</span>
                       <span className="font-mono tabular-nums text-[var(--ink-11)]">
                         ×{(activeEvaluation.patternAlignmentFactor * activeEvaluation.overhangPenaltyFactor).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[var(--ink-10)]">Inset Tepi Aktual (L/W)</span>
+                      <span
+                        className={`font-mono tabular-nums font-medium ${
+                          activeEvaluation.edgeStatus === 'optimal'
+                            ? 'text-[var(--green-11)]'
+                            : activeEvaluation.edgeStatus === 'overhang'
+                            ? 'text-[var(--red-11)]'
+                            : 'text-[var(--amber-11)]'
+                        }`}
+                      >
+                        {activeEvaluation.edgeStatus === 'overhang'
+                          ? `Overhang +${activeEvaluation.overhangL}/+${activeEvaluation.overhangW} mm`
+                          : `-${activeEvaluation.underhangL} / -${activeEvaluation.underhangW} mm`}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -3012,9 +3142,21 @@ export default function PalletizerWorkspace({
                       </div>
                     )}
 
-                    {(activeEvaluation.overhangL > 0.5 || activeEvaluation.overhangW > 0.5) && (
+                    {activeEvaluation.edgeStatus === 'overhang' ? (
+                      <span className="rounded-[var(--radius-sm)] bg-[var(--red-3)] border-[0.5px] border-[var(--red-6)] px-2 py-0.5 text-[11px] text-[var(--red-11)] font-mono tabular-nums whitespace-nowrap">
+                        Overhang +{Math.max(activeEvaluation.overhangL, activeEvaluation.overhangW)} mm
+                      </span>
+                    ) : activeEvaluation.edgeStatus === 'flush-risk' ? (
                       <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)] border-[0.5px] border-[var(--amber-6)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
-                        Overhang ±{Math.max(activeEvaluation.overhangL, activeEvaluation.overhangW)} mm
+                        Tepi Mepet -{Math.min(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                      </span>
+                    ) : activeEvaluation.edgeStatus === 'excessive-underhang' ? (
+                      <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)] border-[0.5px] border-[var(--amber-6)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
+                        Underhang -{Math.max(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                      </span>
+                    ) : (
+                      <span className="rounded-[var(--radius-sm)] bg-[var(--green-3)] border-[0.5px] border-[var(--green-6)] px-2 py-0.5 text-[11px] text-[var(--green-11)] font-mono tabular-nums whitespace-nowrap">
+                        Inset -{activeEvaluation.underhangL}/-{activeEvaluation.underhangW} mm
                       </span>
                     )}
 

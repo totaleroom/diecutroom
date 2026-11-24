@@ -1,6 +1,6 @@
 ---
 verified_at_commit: working-tree-post-d6ae118
-verified_at_date: 2026-11-20
+verified_at_date: 2026-11-24
 app_version: 1.5.0
 lint_and_build_status: VERIFIED (tsc --noEmit & vite build pass)
 automated_tests: NOT PRESENT
@@ -66,8 +66,8 @@ npm run docs:check -- --strict
 | **2D Dieline CAD (FEFCO 0200–0204, 1:1 mm SVG/PDF, ITF-14)** | `IMPLEMENTED` | `src/utils/dieline.ts`, `src/components/BoxPreview.tsx` |
 | **13 SRP Supermarket Patterns (Dash / Non-Dash Rules)** | `IMPLEMENTED` | `src/types.ts`, `src/utils/dieline.ts`, `src/components/Sidebar.tsx` |
 | **3D Fit & Interactive SRP Tear Simulator (0–100%)** | `IMPLEMENTED` | `src/components/Box3DViewer.tsx`, `src/utils/browserEngine.ts` |
-| **Palletizer Pro 3D + Off-Thread Web Worker Solver** | `IMPLEMENTED` | `src/components/PalletizerWorkspace.tsx`, `src/utils/palletizer.ts`, `src/workers/palletizer.worker.ts` |
-| **Export Laporan Engineering PDF Palletizer (A4 2 Halaman Orthographic)** | `IMPLEMENTED` | `src/utils/palletizerReportPdf.ts`, `src/components/PalletizerWorkspace.tsx` — 4 POV Orthographic (`Iso`, `Top`, `Front`, `Side`), warna kontras orientasi `0°/90°`, dimensi vektor `L×W×T`, panel Heat-Map Iso/Top, panduan 2D Layer 1 & Layer 2 bernomor, branding DieCut.Room + Totale.Room |
+| **Palletizer Pro 3D + Off-Thread Web Worker Solver & Zero-Overhang Policy** | `IMPLEMENTED` | `src/components/PalletizerWorkspace.tsx`, `src/utils/palletizer.ts`, `src/workers/palletizer.worker.ts` — kunci Zero-Overhang & Underhang (`-50` s.d. `0 mm/sisi`, bawaan `-10 mm`), preset margin cepat, panduan zona aman 3D, diagnostik *flush/bulge* & *underhang* lebar, serta sinkronisasi *Case Pack* & *Perfectionist Tuning* |
+| **Export Laporan Engineering PDF Palletizer (A4 2 Halaman Orthographic)** | `IMPLEMENTED` | `src/utils/palletizerReportPdf.ts`, `src/components/PalletizerWorkspace.tsx` — 4 POV Orthographic (`Iso`, `Top`, `Front`, `Side`), bingkai zona aman *Underhang Inset* pada denah 2D Layer 1/2, warna kontras orientasi `0°/90°`, dimensi vektor `L×W×T`, panel Heat-Map Iso/Top, branding DieCut.Room + Totale.Room |
 | **BCT Pro & TAPPI/ISO Dual Engine + 8 Pre-Flight Auto-Fix** | `IMPLEMENTED` | `src/utils/engineering.ts`, `src/components/BCTInspectorRail.tsx`, `src/components/EngineeringSheet.tsx` |
 | **3-Unit Workspace (`mm`, `cm`, `in`) & 4-Tier Responsive + Focus Mode** | `IMPLEMENTED` | `src/App.tsx`, `src/hooks/useWorkspaceLayout.ts` |
 | **Auth Dual Cookie (`Partitioned` HttpOnly) + Bearer Token + Lockout** | `IMPLEMENTED` | `server.ts`, `src/utils/apiSession.ts`, `src/components/AuthGate.tsx` |
@@ -76,7 +76,7 @@ npm run docs:check -- --strict
 | **Hermes Agent REST API (`/api/agent/*`) & MCP Server (`/api/mcp`)** | `IMPLEMENTED` | `server.ts` (calculate, dieline 2D SVG/Clean CAD, signed download, JSON-RPC MCP) |
 | **PWA Workbox + Chunk Load Error Recovery** | `IMPLEMENTED` | `vite.config.ts`, `index.html`, `src/utils/lazyWithRetry.ts` |
 | **Split-Deploy & Astro Hub Subdomain Readiness (`VITE_API_BASE_URL` + CORS Allowlist)** | `IMPLEMENTED` | `src/utils/apiSession.ts`, `src/utils/fontLoader.ts`, `src/components/AuthGate.tsx`, `server.ts`, `vercel.json` |
-| **Automated Codebase Index, Visual Catalog & Docs Drift Guard** | `IMPLEMENTED` | `DESIGN.md`, `docs/VISUAL-STATE-CATALOG.md`, `docs/CODEBASE_INDEX.md`, `scripts/generate-codebase-index.ts`, `scripts/capture-visual-snapshots.ts`, `scripts/check-docs-drift.ts`, `.github/workflows/docs-drift.yml` |
+| **Automated Codebase Index, Visual Catalog, Master Prompt & Docs Drift Guard** | `IMPLEMENTED` | `DESIGN.md`, `docs/VISUAL-STATE-CATALOG.md`, `docs/09-ONE-SHOT-MASTER-PROMPT-TEMPLATE.md`, `docs/CODEBASE_INDEX.md`, `scripts/generate-codebase-index.ts`, `scripts/capture-visual-snapshots.ts`, `scripts/check-docs-drift.ts`, `.github/workflows/docs-drift.yml` |
 | **Automated Unit / E2E Test Suite (`npm test`)** | `NOT PRESENT` | Tidak ada test runner di `package.json`; verifikasi via `npm run lint`, `npm run build`, & `npm run docs:check -- --strict` |
 
 ---

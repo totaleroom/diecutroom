@@ -12,6 +12,7 @@ import {
   PalletPatternEvaluation,
 } from '../types';
 import { formatSubstanceString } from './engineering';
+import { computeEffectivePalletDims } from './palletizer';
 
 export interface UvPoint {
   u: number;
@@ -534,14 +535,15 @@ function drawLayerGuideCard(
   const drawW = w - 13.5;
   const drawH = h - hdrH - footerH - 10;
 
+  const { marginMm, effPalletL, effPalletW } = computeEffectivePalletDims(pallet);
   const spanL = Math.max(
-    pallet.palletLengthMm + Math.max(0, pallet.allowedOverhangMm) * 2,
+    pallet.palletLengthMm,
     foot.footprintL,
     Math.abs(foot.minX) * 2,
     Math.abs(foot.maxX) * 2
   );
   const spanW = Math.max(
-    pallet.palletWidthMm + Math.max(0, pallet.allowedOverhangMm) * 2,
+    pallet.palletWidthMm,
     foot.footprintW,
     Math.abs(foot.minZ) * 2,
     Math.abs(foot.maxZ) * 2
@@ -574,14 +576,14 @@ function drawLayerGuideCard(
     doc.line(pLeft + 0.5, py, pLeft + pWidthMm - 0.5, py);
   }
 
-  // 2. Allowed overhang boundary
-  if (pallet.allowedOverhangMm > 0) {
-    const ohL = (pallet.palletLengthMm + 2 * pallet.allowedOverhangMm) * scale;
-    const ohW = (pallet.palletWidthMm + 2 * pallet.allowedOverhangMm) * scale;
-    setStroke(doc, C_RED);
-    doc.setLineWidth(0.18);
-    doc.setLineDashPattern([0.8, 0.8], 0);
-    doc.rect(cx - ohL / 2, cy - ohW / 2, ohL, ohW, 'S');
+  // 2. Safe Underhang Inset Boundary (Zero-Overhang Policy)
+  if (marginMm < -0.5) {
+    const safeL = effPalletL * scale;
+    const safeW = effPalletW * scale;
+    setStroke(doc, C_ACCENT);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([0.9, 0.7], 0);
+    doc.rect(cx - safeL / 2, cy - safeW / 2, safeL, safeW, 'S');
     doc.setLineDashPattern([], 0);
   }
 
@@ -832,16 +834,21 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
   });
 
   // 2. KPI Strip — Status Tumpukan (y = 31.5..46.5)
+  const { marginMm: pdfMarginMm } = computeEffectivePalletDims(pallet);
   const kpiY = 31.5;
   const kpiH = 15;
   const kpis = [
     {
-      k: 'POLA & OVERHANG',
+      k: 'POLA & MARGIN TEPI',
       v: activeEvaluation.label,
       s:
-        activeEvaluation.overhangL > 0.5 || activeEvaluation.overhangW > 0.5
-          ? `Overhang L:${activeEvaluation.overhangL} / W:${activeEvaluation.overhangW} mm`
-          : 'Tanpa overhang (aman tepi)',
+        activeEvaluation.edgeStatus === 'overhang'
+          ? `Overhang +${activeEvaluation.overhangL}/+${activeEvaluation.overhangW} mm`
+          : activeEvaluation.edgeStatus === 'flush-risk'
+          ? `Inset L:${activeEvaluation.underhangL}/W:${activeEvaluation.underhangW} mm (Mepet)`
+          : activeEvaluation.edgeStatus === 'excessive-underhang'
+          ? `Inset L:${activeEvaluation.underhangL}/W:${activeEvaluation.underhangW} mm (Lebar)`
+          : `Inset L:${activeEvaluation.underhangL}/W:${activeEvaluation.underhangW} mm (Aman)`,
     },
     {
       k: 'STATUS TUMPUKAN',
@@ -942,8 +949,14 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
       value: `Tinggi ${pallet.maxStackHeightMm} mm · Beban ${pallet.maxPalletWeightKg} kg`,
     },
     {
-      label: 'Batas Overhang Izin',
-      value: `±${pallet.allowedOverhangMm} mm/sisi (Aktual L:${activeEvaluation.overhangL} / W:${activeEvaluation.overhangW} mm)`,
+      label: 'Margin Tepi / Underhang',
+      value: `${pdfMarginMm} mm/sisi (Zona ${activeEvaluation.effectivePalletL}x${activeEvaluation.effectivePalletW} · Inset L:${activeEvaluation.underhangL}/W:${activeEvaluation.underhangW})`,
+      valueColor:
+        activeEvaluation.edgeStatus === 'optimal'
+          ? C_GREEN
+          : activeEvaluation.edgeStatus === 'overhang'
+          ? C_RED
+          : C_AMBER,
     },
     {
       label: 'Plakban / Strap Top Layer',
@@ -1027,8 +1040,8 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
       value: `${analysis.bctEstimateKgf.toFixed(1)} kgf -> ${analysis.correctedBctKgf.toFixed(1)} kgf`,
     },
     {
-      label: 'Koreksi Pola & Overhang',
-      value: `x${(activeEvaluation.patternAlignmentFactor * activeEvaluation.overhangPenaltyFactor).toFixed(2)} (Pola x${activeEvaluation.patternAlignmentFactor.toFixed(2)} · OH x${activeEvaluation.overhangPenaltyFactor.toFixed(2)})`,
+      label: 'Koreksi Pola & Tepi',
+      value: `x${(activeEvaluation.patternAlignmentFactor * activeEvaluation.overhangPenaltyFactor).toFixed(2)} (Pola x${activeEvaluation.patternAlignmentFactor.toFixed(2)} · Tepi x${activeEvaluation.overhangPenaltyFactor.toFixed(2)})`,
     },
     {
       label: 'BCT Palet Efektif',
@@ -1487,7 +1500,7 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
       color: { r: 239, g: 68, b: 68 },
       shape: 'rect',
       label: 'Rawan / Edge Bebas',
-      desc: 'Overhang atau tepi tidak terkunci',
+      desc: 'Tepi luar tidak terkunci / rentan geser',
     },
     {
       color: C_ORANGE,

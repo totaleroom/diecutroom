@@ -3,7 +3,7 @@
 > **Do not edit manually.** Regenerate anytime with `npm run index:build` (`node scripts/generate-codebase-index.ts`, zero dependencies).
 > AI Agents: Read this index FIRST to jump directly to target line ranges without scanning multi-thousand-line files.
 
-- **Indexed Files**: 35 TypeScript/TSX modules (30,581 total lines)
+- **Indexed Files**: 35 TypeScript/TSX modules (30,825 total lines)
 - **Backend API Endpoints**: 43 routes in `server.ts`
 - **SQLite Tables**: 5 tables (`users` L65, `bct_history` L83, `saved_projects` L92, `system_meta` L106, `audit_logs` L112)
 
@@ -28,7 +28,7 @@
 | `src/components/EngineeringSheet.tsx` | 514 | `EngineeringSheet` |
 | `src/components/HalftoneSheetDecor.tsx` | 217 | `HalftonePerimeterFrame`, `TopRightSheetHalftone` |
 | `src/components/InteractiveMatrixCanvas.tsx` | 819 | `InteractiveMatrixCanvas` |
-| `src/components/PalletizerWorkspace.tsx` | 3227 | `PalletizerWorkspace` |
+| `src/components/PalletizerWorkspace.tsx` | 3369 | `PalletizerWorkspace` |
 | `src/components/ProjectsModal.tsx` | 189 | `ProjectsModal` |
 | `src/components/PWAInstallControl.tsx` | 156 | `usePWAInstall`, `useOnlineStatus`, `PWAInstallButton`, `OfflineIndicator` |
 | `src/components/Sidebar.tsx` | 1316 | `Sidebar` |
@@ -36,15 +36,15 @@
 | `src/components/WhatsAppContactButton.tsx` | 79 | `WhatsAppLogoIcon`, `WhatsAppContactButton` |
 | `src/hooks/useWorkspaceLayout.ts` | 209 | `ViewportTier`, `resolveViewportTier`, `resolveShortLandscape`, `useWorkspaceLayout` |
 | `src/main.tsx` | 48 | *(entry / side-effect)* |
-| `src/types.ts` | 1323 | `BoxStyle`, `DisplayUnit`, `TolerancePreset`, `ExportMode`, `ViewMode`, `FluteDirection`, `CurrencyCode`, `ForceUnit`, `BctCalculationMethod`, `PrintPresetId`, `KraftGradeId`, `WhiteTopGradeId`, *+75 more* |
+| `src/types.ts` | 1344 | `BoxStyle`, `DisplayUnit`, `TolerancePreset`, `ExportMode`, `ViewMode`, `FluteDirection`, `CurrencyCode`, `ForceUnit`, `BctCalculationMethod`, `PrintPresetId`, `KraftGradeId`, `WhiteTopGradeId`, *+79 more* |
 | `src/utils/apiSession.ts` | 72 | `getClientSessionToken`, `setClientSessionToken`, `clearClientSessionToken`, `resolveApiUrl`, `authFetch` |
 | `src/utils/browserEngine.ts` | 228 | `EngineTier`, `EngineQualityProfile`, `getEngineProfile`, `createDynamicResolutionController`, `scheduleIdleWork` |
 | `src/utils/dieline.ts` | 727 | `generateRSCDieline` |
 | `src/utils/engineering.ts` | 1065 | `MM_TO_IN`, `KGF_CM_TO_LBF_IN`, `LBF_TO_KGF`, `MCKEE_K`, `formatMoney`, `getEffectiveRct`, `formatSubstanceString`, `formatMaterialsSummary`, `parseSubstanceString`, `inferFluteIdFromThickness`, `computeWeightedPrintCoverage`, `detectPrintPresetId`, *+16 more* |
 | `src/utils/fontLoader.ts` | 48 | `initBrandFonts` |
 | `src/utils/lazyWithRetry.ts` | 87 | `isChunkLoadError`, `clearBrowserCachesAndReload`, `lazyWithRetry` |
-| `src/utils/palletizer.ts` | 2098 | `PalletPhysicsContext`, `computeCasePackSolutions`, `pickOptimalPatternType`, `computeSmartPalletAdvisor`, `evaluateAllPalletPatterns`, `computePerfectionistTuningReport` |
-| `src/utils/palletizerReportPdf.ts` | 1569 | `UvPoint`, `IsoDimAnchors`, `TopDimAnchors`, `PalletizerPdfCaptureSet`, `PalletizerPdfReportInput`, `exportPalletizerReportPdf` |
+| `src/utils/palletizer.ts` | 2166 | `PalletPhysicsContext`, `normalizePalletEdgeMarginMm`, `computeEffectivePalletDims`, `computeCasePackSolutions`, `pickOptimalPatternType`, `computeSmartPalletAdvisor`, `evaluateAllPalletPatterns`, `computePerfectionistTuningReport` |
+| `src/utils/palletizerReportPdf.ts` | 1582 | `UvPoint`, `IsoDimAnchors`, `TopDimAnchors`, `PalletizerPdfCaptureSet`, `PalletizerPdfReportInput`, `exportPalletizerReportPdf` |
 | `src/utils/units.ts` | 91 | `fromMm`, `toMm`, `formatValue`, `formatDimWithUnit`, `computeGS1CheckDigit`, `ITF14Validation`, `validateITF14`, `fixITF14CheckDigit` |
 | `src/utils/whatsapp.ts` | 123 | `WHATSAPP_ADMIN_PHONE`, `WhatsAppRequestContext`, `collectAccessMetadata`, `buildAdminWhatsAppUrl` |
 | `src/workers/palletizer.worker.ts` | 87 | `SmartPalletAdvisorResult`, `PalletizerWorkerRequest`, `PalletizerWorkerResponse` |
@@ -66,13 +66,13 @@ Jump straight to these line anchors using targeted `StartLine`/`EndLine` reads t
 - **`src/components/BoxPreview.tsx` (1215 lines)**: `L45` fn truncateText · `L50` fn wrapLines · `L71` export BoxPreview · `L204` handleWheel · `L210` handlePointerDown · `L222` handlePointerMove · `L230` handlePointerUp
 - **`src/components/EngineeringSheet.tsx` (514 lines)**: `L33` export EngineeringSheet · `L53` handleLayerChange · `L68` handleCurrencyChange · `L86` handleFluteDirChange
 - **`src/components/InteractiveMatrixCanvas.tsx` (819 lines)**: `L66` fn clamp01 · `L70` fn smoothstep · `L75` fn hash2D · `L80` fn distToSegment · `L96` fn buildProjectedBoxEdges · `L176` fn computeSubtlePinkAccent · `L209` fn sampleFormHalftone · `L273` fn sampleFormTopoDash · `L319` fn sampleFormDitherGrid · `L372` fn sampleFormIsoBox · `L413` export InteractiveMatrixCanvas
-- **`src/components/PalletizerWorkspace.tsx` (3227 lines)**: `L67` fn TactileSection · `L78` fn TactileToggle · `L95` fn TactileSlider · `L135` fn createWoodPalletTexture · `L155` fn createCartonSideTexture · `L174` fn createCartonTopTexture · `L216` fn disposeGroupResources · `L244` fn populatePalletGroup · `L696` fn PatternFootprintSvg · `L815` export PalletizerWorkspace · `L1056` handleApplyCasePackToCad · `L1087` handleApplyPerfectionistToCad · `L1108` handleApplyBoardAdvice · `L1413` setCameraPreset · `L1433` handleOpenPdfModal · `L1439` handleExportPdfReport
+- **`src/components/PalletizerWorkspace.tsx` (3369 lines)**: `L72` fn TactileSection · `L83` fn TactileToggle · `L100` fn TactileSlider · `L140` fn createWoodPalletTexture · `L160` fn createCartonSideTexture · `L179` fn createCartonTopTexture · `L221` fn disposeGroupResources · `L249` fn populatePalletGroup · `L732` fn PatternFootprintSvg · `L851` export PalletizerWorkspace · `L1113` handleApplyCasePackToCad · `L1144` handleApplyPerfectionistToCad · `L1165` handleApplyBoardAdvice · `L1470` setCameraPreset · `L1490` handleOpenPdfModal · `L1496` handleExportPdfReport
 - **`src/components/Sidebar.tsx` (1316 lines)**: `L46` export Sidebar · `L68` handleDimensionChange · `L109` handleProductField · `L126` handleTolerancePreset · `L145` handleSnapZeroHeadspace · `L154` handleInputModeChange · `L190` handlePerforationTypeChange · `L209` handlePerforationRuleModeChange
 - **`src/components/tactile/TactileUI.tsx` (548 lines)**: `L81` export TactileSegmented · `L94` handleKeyDown · `L230` export TactileSelect · `L407` export TactileCheckbox · `L439` export TactileSwitch · `L479` export TactileSheet
 - **`src/utils/dieline.ts` (727 lines)**: `L4` export generateRSCDieline
 - **`src/utils/engineering.ts` (1065 lines)**: `L38` export formatMoney · `L53` export getEffectiveRct · `L60` export formatSubstanceString · `L73` export formatMaterialsSummary · `L83` export parseSubstanceString · `L133` export inferFluteIdFromThickness · `L150` export computeWeightedPrintCoverage · `L163` export detectPrintPresetId · `L177` export estimateTappiEctFromLayers · `L218` export estimateLegacyBctProEct · `L234` export resolveTappiEct · `L266` export resolveLegacyBctProEct · `L299` export computeMcKeeBctKgf · `L316` export computePrintingFactor · `L326` export computeHumidityFactor · `L351` export computeHandlingFactor · `L355` export computeStabilityFactor · `L368` export getPrintCoverageDescription · `L376` export getRecommendedCoverageHint · `L384` export loadBctHistory · `L396` export saveBctHistory · `L405` fn buildMethodResult · `L459` export computeEngineeringAnalysis · `L1036` export computeBoardBurstKpa · `L1055` export computeSurfaceFrictionCoeff
-- **`src/utils/palletizer.ts` (2098 lines)**: `L43` fn round1 · `L47` fn round2 · `L51` fn clamp · `L55` fn clampMin · `L63` export computeCasePackSolutions · `L230` fn centerSlots · `L257` fn flipLayer180 · `L266` fn mirrorLayerX · `L274` fn mirrorLayerZ · `L282` fn rotateLayer90 · `L299` fn buildGridSlots · `L359` fn harmonizeMultiZoneFlushEdges · `L465` fn hasAnyOverlap · `L487` fn solveGuillotinePack · `L606` fn solveSplitBlockAlternate · `L675` fn generatePinwheelSlots · `L781` fn measurePairBridging · `L910` fn pickBestInterlockTransform · `L963` fn generateSingleLayerSlots · `L1066` fn detectFaultLines · `L1155` fn buildAndScoreEvaluation · `L1592` export pickOptimalPatternType · `L1610` export computeSmartPalletAdvisor · `L1674` export evaluateAllPalletPatterns · `L1724` fn estimateScaledBct · `L1743` fn buildBoardSpecAdvice · `L1835` export computePerfectionistTuningReport
-- **`src/utils/palletizerReportPdf.ts` (1569 lines)**: `L89` fn loadTotaleRoomLogoPng · `L128` fn setFill · `L132` fn setStroke · `L136` fn setText · `L140` fn safeAsciiPdf · `L152` fn truncateToFit · `L163` fn getBctStatusStyle · `L181` fn sortPlacementsForOperator · `L193` fn computeLayerFootprint · `L224` fn drawTactileReportHeader · `L294` fn drawKvCard · `L346` fn drawArrowVector · `L371` fn drawDimensionLineHorizontal · `L398` fn drawDimensionLineVertical · `L425` fn drawProjectedSegmentDimension · `L470` fn drawLayerGuideCard · `L749` export exportPalletizerReportPdf
+- **`src/utils/palletizer.ts` (2166 lines)**: `L46` fn round1 · `L50` fn round2 · `L54` fn clamp · `L58` fn clampMin · `L66` export normalizePalletEdgeMarginMm · `L71` export computeEffectivePalletDims · `L88` export computeCasePackSolutions · `L264` fn centerSlots · `L291` fn flipLayer180 · `L300` fn mirrorLayerX · `L308` fn mirrorLayerZ · `L316` fn rotateLayer90 · `L333` fn buildGridSlots · `L393` fn harmonizeMultiZoneFlushEdges · `L499` fn hasAnyOverlap · `L521` fn solveGuillotinePack · `L640` fn solveSplitBlockAlternate · `L709` fn generatePinwheelSlots · `L815` fn measurePairBridging · `L944` fn pickBestInterlockTransform · `L997` fn generateSingleLayerSlots · `L1100` fn detectFaultLines · `L1189` fn buildAndScoreEvaluation · `L1661` export pickOptimalPatternType · `L1679` export computeSmartPalletAdvisor · `L1743` export evaluateAllPalletPatterns · `L1793` fn estimateScaledBct · `L1812` fn buildBoardSpecAdvice
+- **`src/utils/palletizerReportPdf.ts` (1582 lines)**: `L90` fn loadTotaleRoomLogoPng · `L129` fn setFill · `L133` fn setStroke · `L137` fn setText · `L141` fn safeAsciiPdf · `L153` fn truncateToFit · `L164` fn getBctStatusStyle · `L182` fn sortPlacementsForOperator · `L194` fn computeLayerFootprint · `L225` fn drawTactileReportHeader · `L295` fn drawKvCard · `L347` fn drawArrowVector · `L372` fn drawDimensionLineHorizontal · `L399` fn drawDimensionLineVertical · `L426` fn drawProjectedSegmentDimension · `L471` fn drawLayerGuideCard · `L751` export exportPalletizerReportPdf
 
 ---
 
