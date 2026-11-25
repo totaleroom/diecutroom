@@ -1060,6 +1060,16 @@ export type PalletPatternType = 'column' | 'interlock' | 'pinwheel' | 'split-blo
 export type PalletViewOverlayMode = 'normal' | 'lock-heatmap';
 export type PalletLockStatus = 'locked' | 'column' | 'at-risk';
 export type PalletEdgeStatus = 'optimal' | 'flush-risk' | 'excessive-underhang' | 'overhang';
+export type PalletPerimeterAlignMode = 'auto' | 'flush' | 'compact';
+
+export interface PalletInternalGap {
+  x: number; // Center X in pallet mm coords
+  z: number; // Center Z in pallet mm coords
+  sizeX: number; // Gap span along X (mm)
+  sizeZ: number; // Gap span along Z (mm)
+  axis: 'x' | 'z'; // Direction of separation ('x' = horizontal gap, 'z' = vertical gap)
+  gapMm: number; // Gap thickness along separation axis (mm)
+}
 
 export const PALLET_MARGIN_MIN_MM = -50;
 export const PALLET_MARGIN_MAX_MM = 0;
@@ -1086,6 +1096,7 @@ export interface PalletConfig {
   allowedOverhangMm: number; // Per side: locked [-50, 0] mm (<= 0 = safe underhang / edge setback)
   patternType: PalletPatternType;
   patternAutoMode?: boolean;
+  perimeterAlignMode?: PalletPerimeterAlignMode;
   useTierSheets: boolean;
   tierSheetThicknessMm: number;
   useSlipSheet: boolean;
@@ -1229,6 +1240,11 @@ export interface PalletPatternEvaluation {
   effectivePalletL: number;
   effectivePalletW: number;
   edgeStatus: PalletEdgeStatus;
+  perimeterAlignMode: PalletPerimeterAlignMode;
+  perimeterAligned: boolean;
+  maxInternalGapMm: number;
+  oddInternalGaps: PalletInternalGap[];
+  evenInternalGaps: PalletInternalGap[];
   areaEfficiencyPct: number;
   cubeEfficiencyPct: number;
   netLoadKg: number;
@@ -1323,6 +1339,7 @@ export const DEFAULT_PALLET_CONFIG: PalletConfig = {
   allowedOverhangMm: -10,
   patternType: 'interlock',
   patternAutoMode: true,
+  perimeterAlignMode: 'auto',
   useTierSheets: false,
   tierSheetThicknessMm: 3,
   useSlipSheet: true,

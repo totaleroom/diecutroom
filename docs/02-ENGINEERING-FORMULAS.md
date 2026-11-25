@@ -180,4 +180,11 @@ $$
     - `flush-risk` (`< 5 mm/sisi`): Peringatan mepet tepi — *bulge* 5–15 mm saat ditumpuk/lembap berisiko mendorong dus melewati tepi dek.
     - `excessive-underhang` (`> 25 mm/sisi`): Peringatan celah papan dek (menyarankan *Bottom Slip Sheet*), potensi robek *stretch wrap* di sudut kayu, serta saran *Auto-Tuning ±20 mm*.
     - `overhang` (`> 0.5 mm`): Hanya muncul bila ukuran tunggal 1 dus melebihi dimensi fisik dek palet.
+* **Perataan Sisi Luar 3-Mode (`Perataan Sisi Luar` / Flush Perimeter: `auto`, `flush`, `compact`)**:
+  - Menghilangkan sudut gantung tepi luar (*outer overhanging corner*) pada pola campuran (mis. blok 2×3 + strip 2 dus) dengan mendorong dus di tiap strip/band agar rata dengan 4 sisi terluar susunan (`applyPerimeterFlush`) sambil mempertahankan 100% batas zona efektif *Zero-Overhang* dan jumlah dus/layer.
+  - **Mode `auto` (Bawaan)**: Membandingkan kandidat `compact` vs `flush` untuk setiap pola; mengaktifkan `flush` secara otomatis hanya apabila celah tengah hasil perataan (`maxInternalGapMm`) `<= 60 mm`, jumlah *cleavage fault* tidak memburuk, dan dukungan sudut/interlock meningkat atau sama.
+  - **Mode `flush` (`Rata Sisi`)**: Selalu meratakan 4 sisi luar palet untuk memaksimalkan kekokohan sudut luar dan meminimalkan sudut gantung.
+  - **Mode `compact` (`Rapat`)**: Menyusun seluruh dus rapat tanpa celah internal.
+  - **Pengukuran & Guardrail Celah Tengah (`measureInternalGaps`)**: Mendeteksi serta menggabungkan saluran celah internal `>= 4 mm` (`oddInternalGaps`, `evenInternalGaps`); memberi peringatan *inward-shift / chimney void* ketika `maxInternalGapMm > 50 mm` dengan rekomendasi *Tier Sheet* antar-layer atau peralihan ke mode `Rapat`.
+
 

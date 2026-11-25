@@ -17,9 +17,11 @@ import {
   PalletConfig,
   PalletEdgeStatus,
   PalletFaultLine,
+  PalletInternalGap,
   PalletLockStatus,
   PalletPatternEvaluation,
   PalletPatternType,
+  PalletPerimeterAlignMode,
   PalletStabilityMetrics,
   PaperGradeId,
   PerfectionistSizeSuggestion,
@@ -387,12 +389,14 @@ function buildGridSlots(
 }
 
 /**
- * Normalizes a multi-zone layer so sub-bands spanning nearly the same full width or length
- * equalize edge-to-edge cleanly (e.g. 5x203=1015mm aligns flush with 3x348=1044mm like TOPS Pro).
+ * Equalizes multi-zone strips to the layer's full outer bounding rectangle (Flush Perimeter / Push-to-Edges),
+ * eliminating stepped notches and outer corner overhangs by moving slack cleanly into interior gaps.
  */
-function harmonizeMultiZoneFlushEdges(slots: LayerSlot[]): LayerSlot[] {
-  if (slots.length <= 2) return slots;
-  // Detect horizontal row bands sharing similar Z bands
+function applyPerimeterFlush(
+  slots: LayerSlot[],
+  maxGapPerSplitMm: number
+): { slots: LayerSlot[]; changed: boolean } {
+  if (slots.length <= 2) return { slots, changed: false };
   let overallMinX = Infinity;
   let overallMaxX = -Infinity;
   let overallMinZ = Infinity;
@@ -405,8 +409,9 @@ function harmonizeMultiZoneFlushEdges(slots: LayerSlot[]): LayerSlot[] {
   }
   const spanX = overallMaxX - overallMinX;
   const spanZ = overallMaxZ - overallMinZ;
+  let changed = false;
 
-  // Group boxes by exact sizeZ + rounded Z center (horizontal strip detection)
+  // Pass 1: Equalize horizontal strips (shared Z center & sizeZ) to full outer X perimeter
   const zBands = new Map<string, LayerSlot[]>();
   for (const s of slots) {
     const key = `${Math.round(s.z)}_${Math.round(s.sizeZ)}`;
@@ -415,7 +420,7 @@ function harmonizeMultiZoneFlushEdges(slots: LayerSlot[]): LayerSlot[] {
     zBands.set(key, arr);
   }
 
-  const adjusted: LayerSlot[] = [];
+  const adjustedX: LayerSlot[] = [];
   for (const band of zBands.values()) {
     if (band.length >= 2) {
       band.sort((a, b) => a.x - b.x);
@@ -428,72 +433,221 @@ function harmonizeMultiZoneFlushEdges(slots: LayerSlot[]): LayerSlot[] {
         sumW += b.sizeX;
       }
       const bandSpan = bMax - bMin;
-      const deficit = spanX - bandSpan;
-      // If this band spans >= 82% of overall footprint width and gap/carton <= 24mm, equalize flush!
+      const slack = spanX - sumW;
+      const gap = slack / (band.length - 1);
       if (
-        bandSpan / Math.max(1, spanX) >= 0.82 &&
-        spanX - sumW > 1 &&
-        (spanX - sumW) / (band.length - 1) <= 24 &&
-        deficit >= -1
+        bandSpan / Math.max(1, spanX) >= 0.58 &&
+        slack > 2 &&
+        gap <= maxGapPerSplitMm &&
+        spanX - bandSpan > 1.5
       ) {
-        const gap = (spanX - sumW) / (band.length - 1);
         let cursor = overallMinX;
         for (const b of band) {
-          adjusted.push({ ...b, x: round1(cursor + b.sizeX / 2) });
+          adjustedX.push({ ...b, x: round1(cursor + b.sizeX / 2) });
           cursor += b.sizeX + gap;
         }
+        changed = true;
         continue;
       }
     }
-    adjusted.push(...band);
+    adjustedX.push(...band);
   }
 
-  // Only accept harmonized layout if zero overlap introduced
-  if (!hasAnyOverlap(adjusted)) {
-    // Also equalize vertical strips along Z if applicable
-    const xBands = new Map<string, LayerSlot[]>();
-    for (const s of adjusted) {
-      const key = `${Math.round(s.x)}_${Math.round(s.sizeX)}`;
-      const arr = xBands.get(key) || [];
-      arr.push(s);
-      xBands.set(key, arr);
-    }
-    const adjustedZ: LayerSlot[] = [];
-    for (const band of xBands.values()) {
-      if (band.length >= 2) {
-        band.sort((a, b) => a.z - b.z);
-        let bMin = Infinity;
-        let bMax = -Infinity;
-        let sumH = 0;
+  const afterX = !hasAnyOverlap(adjustedX) ? adjustedX : slots;
+  if (afterX === slots) changed = false;
+
+  // Pass 2: Equalize vertical strips (shared X center & sizeX) to full outer Z perimeter
+  const xBands = new Map<string, LayerSlot[]>();
+  for (const s of afterX) {
+    const key = `${Math.round(s.x)}_${Math.round(s.sizeX)}`;
+    const arr = xBands.get(key) || [];
+    arr.push(s);
+    xBands.set(key, arr);
+  }
+
+  let changedZ = false;
+  const adjustedZ: LayerSlot[] = [];
+  for (const band of xBands.values()) {
+    if (band.length >= 2) {
+      band.sort((a, b) => a.z - b.z);
+      let bMin = Infinity;
+      let bMax = -Infinity;
+      let sumH = 0;
+      for (const b of band) {
+        bMin = Math.min(bMin, b.z - b.sizeZ / 2);
+        bMax = Math.max(bMax, b.z + b.sizeZ / 2);
+        sumH += b.sizeZ;
+      }
+      const bandSpan = bMax - bMin;
+      const slack = spanZ - sumH;
+      const gap = slack / (band.length - 1);
+      if (
+        bandSpan / Math.max(1, spanZ) >= 0.58 &&
+        slack > 2 &&
+        gap <= maxGapPerSplitMm &&
+        spanZ - bandSpan > 1.5
+      ) {
+        let cursor = overallMinZ;
         for (const b of band) {
-          bMin = Math.min(bMin, b.z - b.sizeZ / 2);
-          bMax = Math.max(bMax, b.z + b.sizeZ / 2);
-          sumH += b.sizeZ;
+          adjustedZ.push({ ...b, z: round1(cursor + b.sizeZ / 2) });
+          cursor += b.sizeZ + gap;
         }
-        const bandSpan = bMax - bMin;
-        if (
-          bandSpan / Math.max(1, spanZ) >= 0.82 &&
-          spanZ - sumH > 1 &&
-          (spanZ - sumH) / (band.length - 1) <= 24 &&
-          spanZ - bandSpan >= -1
-        ) {
-          const gap = (spanZ - sumH) / (band.length - 1);
-          let cursor = overallMinZ;
-          for (const b of band) {
-            adjustedZ.push({ ...b, z: round1(cursor + b.sizeZ / 2) });
-            cursor += b.sizeZ + gap;
-          }
-          continue;
+        changedZ = true;
+        continue;
+      }
+    }
+    adjustedZ.push(...band);
+  }
+
+  if (changedZ && !hasAnyOverlap(adjustedZ)) {
+    return { slots: adjustedZ, changed: true };
+  }
+  return { slots: afterX, changed };
+}
+
+/**
+ * Measures intentional internal gaps (>= 4 mm) between directly adjacent cartons inside a layer
+ * and merges collinear channel segments for clean telemetry and 2D PDF annotations.
+ */
+function measureInternalGaps(slots: LayerSlot[]): {
+  maxGapMm: number;
+  gaps: PalletInternalGap[];
+} {
+  if (slots.length < 2) return { maxGapMm: 0, gaps: [] };
+
+  const rawGaps: PalletInternalGap[] = [];
+
+  const rectBlocked = (minX: number, maxX: number, minZ: number, maxZ: number, ignoreA: number, ignoreB: number) => {
+    for (let k = 0; k < slots.length; k++) {
+      if (k === ignoreA || k === ignoreB) continue;
+      const c = slots[k];
+      const ox = Math.min(maxX, c.x + c.sizeX / 2) - Math.max(minX, c.x - c.sizeX / 2);
+      const oz = Math.min(maxZ, c.z + c.sizeZ / 2) - Math.max(minZ, c.z - c.sizeZ / 2);
+      if (ox > 2 && oz > 2) return true;
+    }
+    return false;
+  };
+
+  for (let i = 0; i < slots.length; i++) {
+    const a = slots[i];
+    const aL = a.x - a.sizeX / 2;
+    const aR = a.x + a.sizeX / 2;
+    const aT = a.z - a.sizeZ / 2;
+    const aB = a.z + a.sizeZ / 2;
+
+    for (let j = i + 1; j < slots.length; j++) {
+      const b = slots[j];
+      const bL = b.x - b.sizeX / 2;
+      const bR = b.x + b.sizeX / 2;
+      const bT = b.z - b.sizeZ / 2;
+      const bB = b.z + b.sizeZ / 2;
+
+      // Check horizontal separation (X-gap)
+      const ovMinZ = Math.max(aT, bT);
+      const ovMaxZ = Math.min(aB, bB);
+      const ovZ = ovMaxZ - ovMinZ;
+      if (ovZ >= Math.min(a.sizeZ, b.sizeZ) * 0.45 && ovZ >= 20) {
+        const leftRightGap = bL - aR;
+        const rightLeftGap = aL - bR;
+        if (leftRightGap >= 4 && !rectBlocked(aR, bL, ovMinZ, ovMaxZ, i, j)) {
+          rawGaps.push({
+            x: round1((aR + bL) / 2),
+            z: round1((ovMinZ + ovMaxZ) / 2),
+            sizeX: round1(leftRightGap),
+            sizeZ: round1(ovZ),
+            axis: 'x',
+            gapMm: round1(leftRightGap),
+          });
+        } else if (rightLeftGap >= 4 && !rectBlocked(bR, aL, ovMinZ, ovMaxZ, i, j)) {
+          rawGaps.push({
+            x: round1((bR + aL) / 2),
+            z: round1((ovMinZ + ovMaxZ) / 2),
+            sizeX: round1(rightLeftGap),
+            sizeZ: round1(ovZ),
+            axis: 'x',
+            gapMm: round1(rightLeftGap),
+          });
         }
       }
-      adjustedZ.push(...band);
+
+      // Check vertical separation (Z-gap)
+      const ovMinX = Math.max(aL, bL);
+      const ovMaxX = Math.min(aR, bR);
+      const ovX = ovMaxX - ovMinX;
+      if (ovX >= Math.min(a.sizeX, b.sizeX) * 0.45 && ovX >= 20) {
+        const topBotGap = bT - aB;
+        const botTopGap = aT - bB;
+        if (topBotGap >= 4 && !rectBlocked(ovMinX, ovMaxX, aB, bT, i, j)) {
+          rawGaps.push({
+            x: round1((ovMinX + ovMaxX) / 2),
+            z: round1((aB + bT) / 2),
+            sizeX: round1(ovX),
+            sizeZ: round1(topBotGap),
+            axis: 'z',
+            gapMm: round1(topBotGap),
+          });
+        } else if (botTopGap >= 4 && !rectBlocked(ovMinX, ovMaxX, bB, aT, i, j)) {
+          rawGaps.push({
+            x: round1((ovMinX + ovMaxX) / 2),
+            z: round1((bB + aT) / 2),
+            sizeX: round1(ovX),
+            sizeZ: round1(botTopGap),
+            axis: 'z',
+            gapMm: round1(botTopGap),
+          });
+        }
+      }
     }
-    if (!hasAnyOverlap(adjustedZ)) {
-      return adjustedZ;
-    }
-    return adjusted;
   }
-  return slots;
+
+  // Merge collinear adjacent gap segments into clean continuous channels
+  const merged: PalletInternalGap[] = [];
+  for (const g of rawGaps) {
+    let absorbed = false;
+    for (let mIdx = 0; mIdx < merged.length; mIdx++) {
+      const m = merged[mIdx];
+      if (m.axis !== g.axis || Math.abs(m.gapMm - g.gapMm) > 3) continue;
+      if (g.axis === 'z' && Math.abs(m.z - g.z) <= 3) {
+        const mL = m.x - m.sizeX / 2;
+        const mR = m.x + m.sizeX / 2;
+        const gL = g.x - g.sizeX / 2;
+        const gR = g.x + g.sizeX / 2;
+        if (Math.min(mR, gR) >= Math.max(mL, gL) - 6) {
+          const nL = Math.min(mL, gL);
+          const nR = Math.max(mR, gR);
+          merged[mIdx] = {
+            ...m,
+            x: round1((nL + nR) / 2),
+            sizeX: round1(nR - nL),
+            gapMm: Math.max(m.gapMm, g.gapMm),
+          };
+          absorbed = true;
+          break;
+        }
+      } else if (g.axis === 'x' && Math.abs(m.x - g.x) <= 3) {
+        const mT = m.z - m.sizeZ / 2;
+        const mB = m.z + m.sizeZ / 2;
+        const gT = g.z - g.sizeZ / 2;
+        const gB = g.z + g.sizeZ / 2;
+        if (Math.min(mB, gB) >= Math.max(mT, gT) - 6) {
+          const nT = Math.min(mT, gT);
+          const nB = Math.max(mB, gB);
+          merged[mIdx] = {
+            ...m,
+            z: round1((nT + nB) / 2),
+            sizeZ: round1(nB - nT),
+            gapMm: Math.max(m.gapMm, g.gapMm),
+          };
+          absorbed = true;
+          break;
+        }
+      }
+    }
+    if (!absorbed) merged.push(g);
+  }
+
+  const maxGapMm = merged.reduce((mx, g) => Math.max(mx, g.gapMm), 0);
+  return { maxGapMm: round1(maxGapMm), gaps: merged };
 }
 
 function hasAnyOverlap(slots: LayerSlot[]): boolean {
@@ -656,7 +810,7 @@ function solveSplitBlockAlternate(
     const meanZ = centered.filter((s) => !s.rotated90).reduce((acc, s) => acc + s.z, 0);
     const shiftMag = Math.hypot(meanX, meanZ);
     candidates.push({
-      slots: harmonizeMultiZoneFlushEdges(centered),
+      slots: centered,
       offCenterScore: slots.length * 1000 + mixedBonus + (hasVerticalPreferred ? 8 : 0) + Math.min(40, shiftMag * 0.01),
     });
   };
@@ -706,17 +860,149 @@ function solveSplitBlockAlternate(
   return candidates[0]?.slots || centerSlots(multi.slots).centered;
 }
 
+function resolvePerimeterAlignmentChoice(
+  compactSlots: LayerSlot[],
+  effL: number,
+  effW: number,
+  alignMode: PalletPerimeterAlignMode,
+  useTierSheets = false
+): {
+  oddLayer: LayerSlot[];
+  evenLayer: LayerSlot[];
+  footprintL: number;
+  footprintW: number;
+  transformName: string;
+  seamLockPct: number;
+  perimeterAligned: boolean;
+  maxInternalGapMm: number;
+  oddInternalGaps: PalletInternalGap[];
+  evenInternalGaps: PalletInternalGap[];
+} {
+  const compactCentered = centerSlots(compactSlots);
+  const compactSecond = pickBestInterlockTransform(compactCentered.centered, effL, effW);
+  const compactOddGaps = measureInternalGaps(compactCentered.centered);
+  const compactEvenGaps = measureInternalGaps(compactSecond.slots);
+
+  if (alignMode === 'compact') {
+    return {
+      oddLayer: compactCentered.centered,
+      evenLayer: compactSecond.slots,
+      footprintL: compactCentered.footprintL,
+      footprintW: compactCentered.footprintW,
+      transformName: compactSecond.transformName,
+      seamLockPct: compactSecond.seamLockPct,
+      perimeterAligned: false,
+      maxInternalGapMm: Math.max(compactOddGaps.maxGapMm, compactEvenGaps.maxGapMm),
+      oddInternalGaps: compactOddGaps.gaps,
+      evenInternalGaps: compactEvenGaps.gaps,
+    };
+  }
+
+  const maxGapCap = alignMode === 'flush' ? 240 : 60;
+  const flushRes = applyPerimeterFlush(compactCentered.centered, maxGapCap);
+  if (!flushRes.changed) {
+    return {
+      oddLayer: compactCentered.centered,
+      evenLayer: compactSecond.slots,
+      footprintL: compactCentered.footprintL,
+      footprintW: compactCentered.footprintW,
+      transformName: compactSecond.transformName,
+      seamLockPct: compactSecond.seamLockPct,
+      perimeterAligned: false,
+      maxInternalGapMm: Math.max(compactOddGaps.maxGapMm, compactEvenGaps.maxGapMm),
+      oddInternalGaps: compactOddGaps.gaps,
+      evenInternalGaps: compactEvenGaps.gaps,
+    };
+  }
+
+  const flushCentered = centerSlots(flushRes.slots);
+  const flushSecond = pickBestInterlockTransform(flushCentered.centered, effL, effW);
+  const flushOddGaps = measureInternalGaps(flushCentered.centered);
+  const flushEvenGaps = measureInternalGaps(flushSecond.slots);
+  const flushMaxGap = Math.max(flushOddGaps.maxGapMm, flushEvenGaps.maxGapMm);
+
+  if (alignMode === 'flush') {
+    return {
+      oddLayer: flushCentered.centered,
+      evenLayer: flushSecond.slots,
+      footprintL: flushCentered.footprintL,
+      footprintW: flushCentered.footprintW,
+      transformName: flushSecond.transformName,
+      seamLockPct: flushSecond.seamLockPct,
+      perimeterAligned: flushMaxGap >= 2,
+      maxInternalGapMm: flushMaxGap,
+      oddInternalGaps: flushOddGaps.gaps,
+      evenInternalGaps: flushEvenGaps.gaps,
+    };
+  }
+
+  // 'auto': Choose Flush Perimeter only when center gap <= 60mm and corner/seam support improves without adding faults
+  const cFwd = measurePairBridging(compactSecond.slots, compactCentered.centered, useTierSheets);
+  const cRev = measurePairBridging(compactCentered.centered, compactSecond.slots, useTierSheets);
+  const cCorner = (cFwd.supportedCornerPct + cRev.supportedCornerPct) / 2;
+  const cSeam = (cFwd.seamLockPct + cRev.seamLockPct) / 2;
+  const cSupport = (cFwd.avgSupportPct + cRev.avgSupportPct) / 2;
+  const cFault = Math.max(cFwd.faultCount, cRev.faultCount);
+
+  const fFwd = measurePairBridging(flushSecond.slots, flushCentered.centered, useTierSheets);
+  const fRev = measurePairBridging(flushCentered.centered, flushSecond.slots, useTierSheets);
+  const fCorner = (fFwd.supportedCornerPct + fRev.supportedCornerPct) / 2;
+  const fSeam = (fFwd.seamLockPct + fRev.seamLockPct) / 2;
+  const fSupport = (fFwd.avgSupportPct + fRev.avgSupportPct) / 2;
+  const fFault = Math.max(fFwd.faultCount, fRev.faultCount);
+
+  const shouldUseFlush =
+    flushMaxGap <= 60 &&
+    fFault <= cFault &&
+    (fCorner > cCorner + 0.5 ||
+      (fCorner >= cCorner - 0.5 && fSeam >= cSeam - 0.5 && fSupport >= cSupport - 1.5));
+
+  if (shouldUseFlush) {
+    return {
+      oddLayer: flushCentered.centered,
+      evenLayer: flushSecond.slots,
+      footprintL: flushCentered.footprintL,
+      footprintW: flushCentered.footprintW,
+      transformName: flushSecond.transformName,
+      seamLockPct: flushSecond.seamLockPct,
+      perimeterAligned: flushMaxGap >= 2,
+      maxInternalGapMm: flushMaxGap,
+      oddInternalGaps: flushOddGaps.gaps,
+      evenInternalGaps: flushEvenGaps.gaps,
+    };
+  }
+
+  return {
+    oddLayer: compactCentered.centered,
+    evenLayer: compactSecond.slots,
+    footprintL: compactCentered.footprintL,
+    footprintW: compactCentered.footprintW,
+    transformName: compactSecond.transformName,
+    seamLockPct: compactSecond.seamLockPct,
+    perimeterAligned: false,
+    maxInternalGapMm: Math.max(compactOddGaps.maxGapMm, compactEvenGaps.maxGapMm),
+    oddInternalGaps: compactOddGaps.gaps,
+    evenInternalGaps: compactEvenGaps.gaps,
+  };
+}
+
 function generatePinwheelSlots(
   effL: number,
   effW: number,
   boxL: number,
-  boxW: number
+  boxW: number,
+  alignMode: PalletPerimeterAlignMode = 'auto',
+  useTierSheets = false
 ): {
   oddLayer: LayerSlot[];
   evenLayer: LayerSlot[];
   footprintL: number;
   footprintW: number;
   variantNote: string;
+  perimeterAligned: boolean;
+  maxInternalGapMm: number;
+  oddInternalGaps: PalletInternalGap[];
+  evenInternalGaps: PalletInternalGap[];
 } {
   const cellSpan = boxL + boxW;
   if (cellSpan <= effL + 0.5 && cellSpan <= effW + 0.5) {
@@ -785,26 +1071,32 @@ function generatePinwheelSlots(
     ];
 
     const bestPin = candB.length > candA.length ? candB : candA;
-    const centered = centerSlots(harmonizeMultiZoneFlushEdges(bestPin));
-    const bestSecond = pickBestInterlockTransform(centered.centered, effL, effW);
+    const resolved = resolvePerimeterAlignmentChoice(bestPin, effL, effW, alignMode, useTierSheets);
     return {
-      oddLayer: centered.centered,
-      evenLayer: bestSecond.slots,
-      footprintL: centered.footprintL,
-      footprintW: centered.footprintW,
-      variantNote: `Swirl ${unitCols}×${unitRows} + Strip (${bestSecond.transformName})`,
+      oddLayer: resolved.oddLayer,
+      evenLayer: resolved.evenLayer,
+      footprintL: resolved.footprintL,
+      footprintW: resolved.footprintW,
+      variantNote: `Swirl ${unitCols}×${unitRows} + Strip (${resolved.transformName})`,
+      perimeterAligned: resolved.perimeterAligned,
+      maxInternalGapMm: resolved.maxInternalGapMm,
+      oddInternalGaps: resolved.oddInternalGaps,
+      evenInternalGaps: resolved.evenInternalGaps,
     };
   }
 
   const fallback = solveGuillotinePack(effL, effW, boxL, boxW, 2);
-  const centered = centerSlots(harmonizeMultiZoneFlushEdges(fallback.slots));
-  const bestSecond = pickBestInterlockTransform(centered.centered, effL, effW);
+  const resolved = resolvePerimeterAlignmentChoice(fallback.slots, effL, effW, alignMode, useTierSheets);
   return {
-    oddLayer: centered.centered,
-    evenLayer: bestSecond.slots,
-    footprintL: centered.footprintL,
-    footprintW: centered.footprintW,
-    variantNote: `Pinwheel Fallback (${bestSecond.transformName})`,
+    oddLayer: resolved.oddLayer,
+    evenLayer: resolved.evenLayer,
+    footprintL: resolved.footprintL,
+    footprintW: resolved.footprintW,
+    variantNote: `Pinwheel Fallback (${resolved.transformName})`,
+    perimeterAligned: resolved.perimeterAligned,
+    maxInternalGapMm: resolved.maxInternalGapMm,
+    oddInternalGaps: resolved.oddInternalGaps,
+    evenInternalGaps: resolved.evenInternalGaps,
   };
 }
 
@@ -999,13 +1291,19 @@ function generateSingleLayerSlots(
   effL: number,
   effW: number,
   boxL: number,
-  boxW: number
+  boxW: number,
+  alignMode: PalletPerimeterAlignMode = 'auto',
+  useTierSheets = false
 ): {
   oddLayer: LayerSlot[];
   evenLayer: LayerSlot[];
   footprintL: number;
   footprintW: number;
   variantNote: string;
+  perimeterAligned: boolean;
+  maxInternalGapMm: number;
+  oddInternalGaps: PalletInternalGap[];
+  evenInternalGaps: PalletInternalGap[];
 } {
   const nLA = Math.floor((effL + 0.05) / boxL);
   const nWA = Math.floor((effW + 0.05) / boxW);
@@ -1027,69 +1325,78 @@ function generateSingleLayerSlots(
       footprintL,
       footprintW,
       variantNote: `${useB ? `${nLB}×${nWB} (90°)` : `${nLA}×${nWA} (0°)`} lurus 1:1`,
+      perimeterAligned: false,
+      maxInternalGapMm: 0,
+      oddInternalGaps: [],
+      evenInternalGaps: [],
     };
   }
 
   if (pattern === 'interlock') {
     const multi = solveGuillotinePack(effL, effW, boxL, boxW, 2);
-    const harmonized = harmonizeMultiZoneFlushEdges(centerSlots(multi.slots).centered);
+    const resolved = resolvePerimeterAlignmentChoice(
+      multi.slots,
+      effL,
+      effW,
+      alignMode,
+      useTierSheets
+    );
     const maxPure = Math.max(countA, countB);
     const canAlt90 = countA > 0 && countB > 0 && countA === countB;
 
     if (canAlt90 && countA >= multi.slots.length) {
       const odd = centerSlots(buildGridSlots(nLA, nWA, boxL, boxW, false));
       const even = centerSlots(buildGridSlots(nLB, nWB, boxW, boxL, true));
-      const altScore = measurePairBridging(even.centered, odd.centered);
-      const multiTransform = pickBestInterlockTransform(harmonized, effL, effW);
+      const altScore = measurePairBridging(even.centered, odd.centered, useTierSheets);
 
-      if (altScore.seamLockPct >= multiTransform.seamLockPct) {
+      if (altScore.seamLockPct >= resolved.seamLockPct) {
         return {
           oddLayer: odd.centered,
           evenLayer: even.centered,
           footprintL: Math.max(odd.footprintL, even.footprintL),
           footprintW: Math.max(odd.footprintW, even.footprintW),
           variantNote: 'Cross-90° Alt',
+          perimeterAligned: false,
+          maxInternalGapMm: 0,
+          oddInternalGaps: [],
+          evenInternalGaps: [],
         };
       }
     }
 
-    if (multi.slots.length >= maxPure) {
-      const centered = centerSlots(harmonized);
-      const bestSecond = pickBestInterlockTransform(centered.centered, effL, effW);
-      return {
-        oddLayer: centered.centered,
-        evenLayer: bestSecond.slots,
-        footprintL: centered.footprintL,
-        footprintW: centered.footprintW,
-        variantNote: `Flush-Brick (${bestSecond.transformName})`,
-      };
-    }
-
-    const bestSecond = pickBestInterlockTransform(harmonized, effL, effW);
-    const centered = centerSlots(harmonized);
     return {
-      oddLayer: centered.centered,
-      evenLayer: bestSecond.slots,
-      footprintL: centered.footprintL,
-      footprintW: centered.footprintW,
-      variantNote: bestSecond.transformName,
+      oddLayer: resolved.oddLayer,
+      evenLayer: resolved.evenLayer,
+      footprintL: resolved.footprintL,
+      footprintW: resolved.footprintW,
+      variantNote:
+        multi.slots.length >= maxPure
+          ? `${resolved.perimeterAligned ? 'Flush-Brick' : 'Compact-Brick'} (${resolved.transformName})`
+          : resolved.transformName,
+      perimeterAligned: resolved.perimeterAligned,
+      maxInternalGapMm: resolved.maxInternalGapMm,
+      oddInternalGaps: resolved.oddInternalGaps,
+      evenInternalGaps: resolved.evenInternalGaps,
     };
   }
 
   if (pattern === 'pinwheel') {
-    return generatePinwheelSlots(effL, effW, boxL, boxW);
+    return generatePinwheelSlots(effL, effW, boxL, boxW, alignMode, useTierSheets);
   }
 
   // 'split-block': Alternative guillotine axis split (vertical-preferred vs interlock horizontal)
   const altSlots = solveSplitBlockAlternate(effL, effW, boxL, boxW);
-  const centered = centerSlots(altSlots);
-  const bestSecond = pickBestInterlockTransform(centered.centered, effL, effW);
+  const resolved = resolvePerimeterAlignmentChoice(altSlots, effL, effW, alignMode, useTierSheets);
   return {
-    oddLayer: centered.centered,
-    evenLayer: bestSecond.slots,
-    footprintL: centered.footprintL,
-    footprintW: centered.footprintW,
-    variantNote: `Split-Zone (${bestSecond.transformName})`,
+    oddLayer: resolved.oddLayer,
+    evenLayer: resolved.evenLayer,
+    footprintL: resolved.footprintL,
+    footprintW: resolved.footprintW,
+    variantNote: `${resolved.perimeterAligned ? 'Split-Flush' : 'Split-Zone'} (${resolved.transformName})`,
+    perimeterAligned: resolved.perimeterAligned,
+    maxInternalGapMm: resolved.maxInternalGapMm,
+    oddInternalGaps: resolved.oddInternalGaps,
+    evenInternalGaps: resolved.evenInternalGaps,
   };
 }
 
@@ -1208,7 +1515,16 @@ function buildAndScoreEvaluation(
   const tierPadH = palletCfg.useTierSheets ? Math.max(1, palletCfg.tierSheetThicknessMm) : 0;
   const palletArea = Math.max(1, palletCfg.palletLengthMm * palletCfg.palletWidthMm);
 
-  const tpl = generateSingleLayerSlots(patternType, effPalletL, effPalletW, boxL, boxW);
+  const perimeterAlignMode: PalletPerimeterAlignMode = palletCfg.perimeterAlignMode || 'auto';
+  const tpl = generateSingleLayerSlots(
+    patternType,
+    effPalletL,
+    effPalletW,
+    boxL,
+    boxW,
+    perimeterAlignMode,
+    palletCfg.useTierSheets
+  );
   const refCasesPerLayer = Math.max(
     1,
     Math.min(tpl.oddLayer.length, tpl.evenLayer.length || tpl.oddLayer.length)
@@ -1579,6 +1895,17 @@ function buildAndScoreEvaluation(
         : `Underhang lebar (L:${underhangL} / W:${underhangW} mm/sisi): cek tegangan stretch wrap di tepi kayu & pertimbangkan Auto-Tuning ±20mm untuk efisiensi area lebih baik.`
     );
   }
+  if (tpl.maxInternalGapMm > 50) {
+    recommendations.push(
+      !palletCfg.useTierSheets
+        ? `Rongga tengah lebar (${tpl.maxInternalGapMm} mm > 50 mm): sudut dalam dus atas rawan turun & dus berisiko geser ke dalam saat rem — aktifkan Tier Sheet Pad atau beralih ke mode Rapat.`
+        : `Rongga tengah ${tpl.maxInternalGapMm} mm (terbantu Tier Sheet): pastikan tegangan stretch wrap kencang & ikuti panduan jarak celah di PDF 2D.`
+    );
+  } else if (tpl.perimeterAligned && tpl.maxInternalGapMm >= 5) {
+    recommendations.push(
+      `Sisi luar rata penuh (celah tengah ${tpl.maxInternalGapMm} mm aman ≤ 50 mm): sudut luar tertopang vertikal & stretch wrap mengikat rata.`
+    );
+  }
   if (recommendations.length === 0) {
     recommendations.push(
       `Perfeksionis: 0 garis belah, Inset aman L:${underhangL}/W:${underhangW} mm, Lock ${seamLockPct}%, Sudut ${supportedCornerPct}%, Burst ${burstStrengthKpa} kPa.`
@@ -1602,6 +1929,11 @@ function buildAndScoreEvaluation(
     effectivePalletL: effPalletL,
     effectivePalletW: effPalletW,
     edgeStatus,
+    perimeterAlignMode,
+    perimeterAligned: tpl.perimeterAligned,
+    maxInternalGapMm: tpl.maxInternalGapMm,
+    oddInternalGaps: tpl.oddInternalGaps,
+    evenInternalGaps: tpl.evenInternalGaps,
     areaEfficiencyPct,
     cubeEfficiencyPct,
     netLoadKg,
@@ -1975,7 +2307,15 @@ export function computePerfectionistTuningReport(
     let bestCount = 0;
 
     for (const pat of ['interlock', 'pinwheel', 'split-block'] as const) {
-      const tpl = generateSingleLayerSlots(pat, effL, effW, od.length, od.width);
+      const tpl = generateSingleLayerSlots(
+        pat,
+        effL,
+        effW,
+        od.length,
+        od.width,
+        probeCfg.perimeterAlignMode || 'auto',
+        probeCfg.useTierSheets
+      );
       const cnt = tpl.oddLayer.length;
       if (cnt <= 0) continue;
       const pair = measurePairBridging(tpl.evenLayer, tpl.oddLayer, probeCfg.useTierSheets);

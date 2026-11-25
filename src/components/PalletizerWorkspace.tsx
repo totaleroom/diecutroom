@@ -38,6 +38,7 @@ import {
   PalletConfig,
   PalletPatternEvaluation,
   PalletPatternType,
+  PalletPerimeterAlignMode,
   PalletViewOverlayMode,
   PerfectionistSizeSuggestion,
   PerfectionistTuningReport,
@@ -56,6 +57,13 @@ import {
 } from '../utils/palletizer';
 import { getEngineProfile, createDynamicResolutionController } from '../utils/browserEngine';
 import { exportPalletizerReportPdf } from '../utils/palletizerReportPdf';
+import {
+  buildPalletVectorScene,
+  downloadPalletVectorSvg,
+  exportPalletVectorPdf,
+  VECTOR_STROKE_PRESETS,
+  VectorStrokePreset,
+} from '../utils/palletizerVectorExport';
 import type {
   PalletizerWorkerRequest,
   PalletizerWorkerResponse,
@@ -887,9 +895,15 @@ export default function PalletizerWorkspace({
   );
   const [contextLost, setContextLost] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [exportModalTab, setExportModalTab] = useState<'engineering' | 'vector'>('engineering');
   const [reportProjectName, setReportProjectName] = useState(() => config.metadata.productName || '');
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingVectorPdf, setExportingVectorPdf] = useState(false);
   const [exportPdfError, setExportPdfError] = useState<string | null>(null);
+  const [vecIncludeFrames, setVecIncludeFrames] = useState(true);
+  const [vecIncludeMaxStack, setVecIncludeMaxStack] = useState(true);
+  const [vecStrokePreset, setVecStrokePreset] = useState<VectorStrokePreset>('standard');
+  const [vecPreviewBg, setVecPreviewBg] = useState<'kraft' | 'white'>('kraft');
 
   // Solve right-sizing solutions for primary products synced with effective pallet underhang zone
   const casePackSolutions = useMemo(
@@ -1491,6 +1505,59 @@ export default function PalletizerWorkspace({
     setExportPdfError(null);
     setReportProjectName((prev) => prev || config.metadata.productName || '');
     setPdfModalOpen(true);
+  };
+
+  const vectorPreviewScene = useMemo(() => {
+    if (!pdfModalOpen || exportModalTab !== 'vector') return null;
+    return buildPalletVectorScene(pallet, activeEvaluation, {
+      includeFramesAndText: vecIncludeFrames,
+      includeMaxStackPanel: vecIncludeMaxStack,
+      strokePreset: vecStrokePreset,
+      projectOrClientName: reportProjectName,
+    });
+  }, [
+    pdfModalOpen,
+    exportModalTab,
+    pallet,
+    activeEvaluation,
+    vecIncludeFrames,
+    vecIncludeMaxStack,
+    vecStrokePreset,
+    reportProjectName,
+  ]);
+
+  const handleExportVectorSvg = () => {
+    try {
+      setExportPdfError(null);
+      downloadPalletVectorSvg(pallet, activeEvaluation, {
+        includeFramesAndText: vecIncludeFrames,
+        includeMaxStackPanel: vecIncludeMaxStack,
+        strokePreset: vecStrokePreset,
+        projectOrClientName: reportProjectName,
+      });
+    } catch (err) {
+      console.error('Export Pallet Vector SVG failed:', err);
+      setExportPdfError('Gagal mengekspor Vector SVG. Silakan coba lagi.');
+    }
+  };
+
+  const handleExportVectorPdf = async () => {
+    if (exportingVectorPdf) return;
+    setExportingVectorPdf(true);
+    setExportPdfError(null);
+    try {
+      await exportPalletVectorPdf(pallet, activeEvaluation, {
+        includeFramesAndText: vecIncludeFrames,
+        includeMaxStackPanel: vecIncludeMaxStack,
+        strokePreset: vecStrokePreset,
+        projectOrClientName: reportProjectName,
+      });
+    } catch (err) {
+      console.error('Export Pallet Vector PDF failed:', err);
+      setExportPdfError('Gagal mengekspor Vector PDF. Silakan coba lagi.');
+    } finally {
+      setExportingVectorPdf(false);
+    }
   };
 
   const handleExportPdfReport = async () => {
@@ -2321,6 +2388,71 @@ export default function PalletizerWorkspace({
                     </div>
                   </div>
 
+                  <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-2.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-[var(--ink-12)]">
+                        Perataan Sisi Luar
+                      </span>
+                      <span
+                        className={`font-mono tabular-nums text-[10px] font-medium ${
+                          activeEvaluation.maxInternalGapMm > 50
+                            ? 'text-[var(--amber-11)]'
+                            : activeEvaluation.perimeterAligned
+                            ? 'text-[var(--green-11)]'
+                            : 'text-[var(--ink-10)]'
+                        }`}
+                      >
+                        {activeEvaluation.perimeterAligned ? 'Aktif: Rata Sisi' : 'Aktif: Rapat'}
+                      </span>
+                    </div>
+
+                    <TactileSegmented<PalletPerimeterAlignMode>
+                      value={pallet.perimeterAlignMode ?? 'auto'}
+                      onChange={(mode) => updatePallet({ perimeterAlignMode: mode })}
+                      size="compact"
+                      fullWidth
+                      ariaLabel="Mode perataan sisi luar palet"
+                      options={[
+                        {
+                          value: 'auto',
+                          label: 'Auto',
+                          title: 'Otomatis ratakan sisi luar jika celah tengah <= 60 mm dan mengurangi sudut gantung',
+                        },
+                        {
+                          value: 'flush',
+                          label: 'Rata Sisi',
+                          title: 'Dorong dus rata ke 4 sisi luar palet (eliminasi sudut gantung tepi)',
+                        },
+                        {
+                          value: 'compact',
+                          label: 'Rapat',
+                          title: 'Susunan rapat tanpa celah tengah (perilaku kompak standar)',
+                        },
+                      ]}
+                    />
+
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] pt-1 border-t-[0.5px] border-[var(--line)]">
+                      <span className="text-[var(--ink-10)]">
+                        {activeEvaluation.maxInternalGapMm > 50
+                          ? 'Celah lebar: sarankan Tier Sheet'
+                          : activeEvaluation.perimeterAligned
+                          ? '4 sisi luar rata (anti-sudut gantung)'
+                          : 'Susunan rapat tanpa rongga tengah'}
+                      </span>
+                      <span
+                        className={`font-mono tabular-nums font-medium shrink-0 ${
+                          activeEvaluation.maxInternalGapMm > 50
+                            ? 'text-[var(--amber-11)]'
+                            : activeEvaluation.maxInternalGapMm >= 5
+                            ? 'text-[var(--green-11)]'
+                            : 'text-[var(--ink-10)]'
+                        }`}
+                      >
+                        Celah {activeEvaluation.maxInternalGapMm} mm
+                      </span>
+                    </div>
+                  </div>
+
                   <div>
                     <div className="flex items-center justify-between text-[11px] text-[var(--ink-10)] mb-1">
                       <span>Jumlah Layer Tumpukan</span>
@@ -2831,6 +2963,22 @@ export default function PalletizerWorkspace({
                       </span>
                     </div>
                     <div className="flex justify-between">
+                      <span className="text-[var(--ink-10)]">Perataan Sisi &amp; Celah</span>
+                      <span
+                        className={`font-mono tabular-nums font-medium ${
+                          activeEvaluation.maxInternalGapMm > 50
+                            ? 'text-[var(--amber-11)]'
+                            : activeEvaluation.perimeterAligned
+                            ? 'text-[var(--green-11)]'
+                            : 'text-[var(--ink-11)]'
+                        }`}
+                      >
+                        {activeEvaluation.perimeterAligned
+                          ? `Rata Sisi · ${activeEvaluation.maxInternalGapMm} mm`
+                          : `Rapat · ${activeEvaluation.maxInternalGapMm} mm`}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
                       <span className="text-[var(--ink-10)]">BCT Palet Efektif</span>
                       <span className="font-mono tabular-nums font-semibold text-[var(--ink-12)]">
                         {activeEvaluation.effectivePalletBctKgf.toFixed(1)} kgf
@@ -3160,6 +3308,23 @@ export default function PalletizerWorkspace({
                       </span>
                     )}
 
+                    {activeEvaluation.maxInternalGapMm >= 5 && (
+                      <span
+                        title={
+                          activeEvaluation.maxInternalGapMm > 50
+                            ? `Celah tengah ${activeEvaluation.maxInternalGapMm} mm (>50 mm): aktifkan Tier Sheet atau ganti mode Rapat`
+                            : `Perataan Sisi Luar aktif dengan celah tengah aman ${activeEvaluation.maxInternalGapMm} mm`
+                        }
+                        className={`rounded-[var(--radius-sm)] border-[0.5px] px-2 py-0.5 text-[11px] font-mono tabular-nums whitespace-nowrap ${
+                          activeEvaluation.maxInternalGapMm > 50
+                            ? 'bg-[var(--amber-3)] border-[var(--amber-6)] text-[var(--amber-11)]'
+                            : 'bg-[var(--green-3)] border-[var(--green-6)] text-[var(--green-11)]'
+                        }`}
+                      >
+                        Celah {activeEvaluation.maxInternalGapMm} mm
+                      </span>
+                    )}
+
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-sm)] border-[0.5px] text-[11px] font-medium shrink-0 ${bctStatusMeta.badgeClass}`}
                     >
@@ -3253,7 +3418,7 @@ export default function PalletizerWorkspace({
         )}
       </div>
 
-      {/* Export Laporan Engineering Palletizer PDF Dialog */}
+      {/* Export Palletizer Dialog: Engineering Report PDF (2 Hal) + Illustrator Vector Pack (PDF/SVG) */}
       {pdfModalOpen && (
         <div
           role="dialog"
@@ -3261,36 +3426,67 @@ export default function PalletizerWorkspace({
           aria-labelledby="pallet-pdf-modal-title"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--backdrop)] backdrop-blur-[2px]"
           onClick={(e) => {
-            if (e.target === e.currentTarget && !exportingPdf) {
+            if (e.target === e.currentTarget && !exportingPdf && !exportingVectorPdf) {
               setPdfModalOpen(false);
             }
           }}
         >
-          <div className="surface-raised w-full max-w-[400px] bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] overflow-hidden">
-            <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2">
+          <div
+            className={`surface-raised w-full ${
+              exportModalTab === 'vector' ? 'max-w-[560px]' : 'max-w-[420px]'
+            } max-h-[90vh] flex flex-col bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] overflow-hidden transition-[max-width] duration-200`}
+          >
+            <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 shrink-0">
               <div className="min-w-0">
                 <h2
                   id="pallet-pdf-modal-title"
                   className="text-[13px] font-semibold text-[var(--ink-12)] truncate"
                 >
-                  Export Laporan Palletizer PDF
+                  {exportModalTab === 'vector'
+                    ? 'Export Vektor Kemasan (Adobe Illustrator)'
+                    : 'Export Laporan Palletizer PDF'}
                 </h2>
                 <p className="text-[11px] text-[var(--ink-10)]">
-                  Format A4 · 2 Halaman siap cetak &amp; serah terima gudang
+                  {exportModalTab === 'vector'
+                    ? 'Line-art hitam murni transparan (HLR) siap edit di Illustrator & cetak flexo'
+                    : 'Format A4 · 2 Halaman siap cetak & serah terima gudang'}
                 </p>
               </div>
               <button
                 type="button"
-                disabled={exportingPdf}
+                disabled={exportingPdf || exportingVectorPdf}
                 onClick={() => setPdfModalOpen(false)}
-                aria-label="Tutup dialog Export PDF"
+                aria-label="Tutup dialog Export Palletizer"
                 className="size-7 rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] cursor-pointer disabled:opacity-50"
               >
                 <X size={14} />
               </button>
             </div>
 
-            <div className="p-4 space-y-3.5 text-[12px]">
+            <div className="p-4 space-y-3.5 text-[12px] overflow-y-auto">
+              <TactileSegmented<'engineering' | 'vector'>
+                value={exportModalTab}
+                onChange={(tab) => {
+                  setExportPdfError(null);
+                  setExportModalTab(tab);
+                }}
+                size="compact"
+                fullWidth
+                ariaLabel="Jenis file ekspor Palletizer"
+                options={[
+                  {
+                    value: 'engineering',
+                    label: 'Laporan Engineering (2 Hal)',
+                    title: 'Laporan PDF A4 2 halaman lengkap dengan 4 POV Orthographic & Heat-Map',
+                  },
+                  {
+                    value: 'vector',
+                    label: 'Vektor Kemasan (AI-Ready)',
+                    title: 'Vektor line-art transparan (PDF & SVG) siap ekstrak di Adobe Illustrator',
+                  },
+                ]}
+              />
+
               <div>
                 <label
                   htmlFor="pallet-pdf-project-name"
@@ -3307,29 +3503,188 @@ export default function PalletizerWorkspace({
                   placeholder="Contoh: PT Karya Kemas · SKU Minyak 1L"
                   autoFocus
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !exportingPdf) {
-                      void handleExportPdfReport();
-                    } else if (e.key === 'Escape' && !exportingPdf) {
+                    if (e.key === 'Enter' && !exportingPdf && !exportingVectorPdf) {
+                      if (exportModalTab === 'vector') {
+                        void handleExportVectorPdf();
+                      } else {
+                        void handleExportPdfReport();
+                      }
+                    } else if (e.key === 'Escape' && !exportingPdf && !exportingVectorPdf) {
                       setPdfModalOpen(false);
                     }
                   }}
                 />
                 <p className="mt-1 text-[10.5px] text-[var(--ink-10)]">
-                  Ditampilkan di header Halaman 1 &amp; 2 dan menjadi nama file PDF.
+                  {exportModalTab === 'vector'
+                    ? 'Digunakan sebagai nama file unduhan PDF & SVG.'
+                    : 'Ditampilkan di header Halaman 1 & 2 dan menjadi nama file PDF.'}
                 </p>
               </div>
 
-              <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] border-[0.5px] border-[var(--line)] p-2.5 space-y-1 text-[11px] text-[var(--ink-11)]">
-                <div className="font-medium text-[var(--ink-12)]">Isi Laporan PDF (2 Halaman A4):</div>
-                <ul className="space-y-0.5 pl-3.5 list-disc">
-                  <li>
-                    <span className="font-medium text-[var(--ink-12)]">Hal 1:</span> Status Tumpukan, Spec &amp; Material, Tipe Palet &amp; Aksesori, Operating Conditions, Audit BCT, Audit Stabilitas, serta Diagram 2D Layer 1 &amp; Layer 2 (bernomor dus, panah orientasi, dimensi mm).
-                  </li>
-                  <li>
-                    <span className="font-medium text-[var(--ink-12)]">Hal 2:</span> 4 POV Normal (Iso, Top, Front, Side) + Panel Khusus Heat-Map (Iso &amp; Top) beserta legenda penguncian &amp; sudut gantung.
-                  </li>
-                </ul>
-              </div>
+              {exportModalTab === 'engineering' ? (
+                <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] border-[0.5px] border-[var(--line)] p-2.5 space-y-1 text-[11px] text-[var(--ink-11)]">
+                  <div className="font-medium text-[var(--ink-12)]">Isi Laporan PDF (2 Halaman A4):</div>
+                  <ul className="space-y-0.5 pl-3.5 list-disc">
+                    <li>
+                      <span className="font-medium text-[var(--ink-12)]">Hal 1:</span> Status Tumpukan, Spec &amp; Material, Tipe Palet &amp; Aksesori, Operating Conditions, Audit BCT, Audit Stabilitas, serta Diagram 2D Layer 1 &amp; Layer 2 (bernomor dus, panah orientasi, celah tengah, dimensi mm).
+                    </li>
+                    <li>
+                      <span className="font-medium text-[var(--ink-12)]">Hal 2:</span> 4 POV Normal (Iso, Top, Front, Side) + Panel Khusus Heat-Map (Iso &amp; Top) beserta legenda penguncian &amp; sudut gantung.
+                    </li>
+                  </ul>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {/* Live Vector Shipping-Mark Preview */}
+                  <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] overflow-hidden">
+                    <div className="px-2.5 py-1.5 bg-[var(--ink-2)] border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 text-[10.5px]">
+                      <span className="text-[var(--ink-11)] font-mono tabular-nums truncate">
+                        {vectorPreviewScene
+                          ? `${vectorPreviewScene.artboardWidthMm}×${vectorPreviewScene.artboardHeightMm} mm · ${vectorPreviewScene.stats.totalSegments} segmen vektor`
+                          : 'Memuat pratinjau vektor...'}
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setVecPreviewBg('kraft')}
+                          className={`px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-medium cursor-pointer transition-colors ${
+                            vecPreviewBg === 'kraft'
+                              ? 'bg-[var(--ink-12)] text-white'
+                              : 'text-[var(--ink-11)] hover:bg-[var(--ink-3)]'
+                          }`}
+                        >
+                          Simulasi Kraft
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVecPreviewBg('white')}
+                          className={`px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-medium cursor-pointer transition-colors ${
+                            vecPreviewBg === 'white'
+                              ? 'bg-[var(--ink-12)] text-white'
+                              : 'text-[var(--ink-11)] hover:bg-[var(--ink-3)]'
+                          }`}
+                        >
+                          Putih
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      className="p-3 flex items-center justify-center transition-colors"
+                      style={{
+                        backgroundColor: vecPreviewBg === 'kraft' ? '#D9C8AA' : '#FFFFFF',
+                      }}
+                    >
+                      {vectorPreviewScene && (
+                        <svg
+                          viewBox={`0 0 ${vectorPreviewScene.artboardWidthMm} ${vectorPreviewScene.artboardHeightMm}`}
+                          className="w-full h-auto max-h-[190px] block"
+                          role="img"
+                          aria-label="Pratinjau vektor kemasan Top View dan Isometrik"
+                        >
+                          {vectorPreviewScene.groups.map((g) => (
+                            <g key={g.id} id={`preview-${g.id}`}>
+                              {g.rects.map((r, i) => (
+                                <rect
+                                  key={i}
+                                  x={r.x}
+                                  y={r.y}
+                                  width={r.w}
+                                  height={r.h}
+                                  rx={r.rx}
+                                  ry={r.rx}
+                                  fill={r.fill ? '#000000' : 'none'}
+                                  stroke={r.stroke ? '#000000' : 'none'}
+                                  strokeWidth={
+                                    r.stroke
+                                      ? r.strokeWidthMm ?? vectorPreviewScene.baseStrokeWidthMm
+                                      : undefined
+                                  }
+                                  strokeLinejoin="round"
+                                />
+                              ))}
+                              {g.segments.map((s, i) => (
+                                <line
+                                  key={i}
+                                  x1={s.x1}
+                                  y1={s.y1}
+                                  x2={s.x2}
+                                  y2={s.y2}
+                                  fill="none"
+                                  stroke="#000000"
+                                  strokeWidth={
+                                    s.strokeWidthMm ?? vectorPreviewScene.baseStrokeWidthMm
+                                  }
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              ))}
+                              {g.texts.map((t, i) => (
+                                <text
+                                  key={i}
+                                  x={t.x}
+                                  y={t.y}
+                                  fill="#000000"
+                                  fontFamily="Helvetica, Arial, sans-serif"
+                                  fontSize={t.fontSizeMm}
+                                  fontWeight={t.bold ? 'bold' : 'normal'}
+                                  textAnchor={
+                                    t.align === 'left'
+                                      ? 'start'
+                                      : t.align === 'right'
+                                      ? 'end'
+                                      : 'middle'
+                                  }
+                                >
+                                  {t.text}
+                                </text>
+                              ))}
+                            </g>
+                          ))}
+                        </svg>
+                      )}
+                    </div>
+
+                    <div className="px-2.5 py-1.5 bg-[var(--ink-2)] border-t-[0.5px] border-[var(--line)] text-[10px] text-[var(--ink-10)]">
+                      Latar kraft hanya simulasi pratinjau. File PDF &amp; SVG yang diunduh 100% transparan tanpa fill (garis belakang terpotong bersih).
+                    </div>
+                  </div>
+
+                  {/* Vector Customization Controls */}
+                  <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--ink-2)]/60 p-2.5 space-y-2">
+                    <TactileToggle
+                      checked={vecIncludeFrames}
+                      onChange={setVecIncludeFrames}
+                      label="Bingkai & Teks Shipping Mark (Dwibahasa)"
+                    />
+                    <TactileToggle
+                      checked={vecIncludeMaxStack}
+                      onChange={setVecIncludeMaxStack}
+                      label={`Sertakan Panel Maximum Stacking (${activeEvaluation.layerCount} Layer)`}
+                    />
+                    <div className="pt-1 border-t-[0.5px] border-[var(--line)] space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-[var(--ink-11)]">Ketebalan Garis (Stroke)</span>
+                        <span className="font-mono tabular-nums text-[10.5px] text-[var(--ink-10)]">
+                          {VECTOR_STROKE_PRESETS[vecStrokePreset].strokeMm} mm
+                        </span>
+                      </div>
+                      <TactileSegmented<VectorStrokePreset>
+                        value={vecStrokePreset}
+                        onChange={setVecStrokePreset}
+                        size="compact"
+                        fullWidth
+                        ariaLabel="Ketebalan garis stroke vektor"
+                        options={[
+                          { value: 'thin', label: 'Tipis', title: VECTOR_STROKE_PRESETS.thin.hint },
+                          { value: 'standard', label: 'Standar', title: VECTOR_STROKE_PRESETS.standard.hint },
+                          { value: 'bold', label: 'Tebal', title: VECTOR_STROKE_PRESETS.bold.hint },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {exportPdfError && (
                 <div className="rounded-[var(--radius-control)] bg-[var(--red-3)] border-[0.5px] border-[var(--red-6)] px-2.5 py-2 text-[11px] text-[var(--red-11)] flex items-start gap-1.5">
@@ -3338,26 +3693,54 @@ export default function PalletizerWorkspace({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
                 <TactileButton
                   type="button"
                   variant="secondary"
                   size="default"
-                  disabled={exportingPdf}
+                  disabled={exportingPdf || exportingVectorPdf}
                   onClick={() => setPdfModalOpen(false)}
                 >
                   Batal
                 </TactileButton>
-                <TactileButton
-                  type="button"
-                  variant="primary"
-                  size="default"
-                  disabled={exportingPdf}
-                  onClick={() => void handleExportPdfReport()}
-                >
-                  <FileDown size={14} />
-                  <span>{exportingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF (2 Hal)'}</span>
-                </TactileButton>
+
+                {exportModalTab === 'engineering' ? (
+                  <TactileButton
+                    type="button"
+                    variant="primary"
+                    size="default"
+                    disabled={exportingPdf}
+                    onClick={() => void handleExportPdfReport()}
+                  >
+                    <FileDown size={14} />
+                    <span>{exportingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF (2 Hal)'}</span>
+                  </TactileButton>
+                ) : (
+                  <>
+                    <TactileButton
+                      type="button"
+                      variant="secondary"
+                      size="default"
+                      disabled={exportingVectorPdf}
+                      onClick={handleExportVectorSvg}
+                      title="Unduh SVG terstruktur dengan grup layer siap Adobe Illustrator"
+                    >
+                      <FileDown size={14} />
+                      <span>Unduh SVG (AI)</span>
+                    </TactileButton>
+                    <TactileButton
+                      type="button"
+                      variant="primary"
+                      size="default"
+                      disabled={exportingVectorPdf}
+                      onClick={() => void handleExportVectorPdf()}
+                      title="Unduh PDF vektor murni tanpa warna & tanpa gambar raster"
+                    >
+                      <FileDown size={14} />
+                      <span>{exportingVectorPdf ? 'Menyiapkan...' : 'Unduh Vector PDF (AI)'}</span>
+                    </TactileButton>
+                  </>
+                )}
               </div>
             </div>
           </div>

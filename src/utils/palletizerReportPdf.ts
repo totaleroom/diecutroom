@@ -9,6 +9,7 @@ import {
   PALLET_PRESETS,
   PalletBoxPlacement,
   PalletConfig,
+  PalletInternalGap,
   PalletPatternEvaluation,
 } from '../types';
 import { formatSubstanceString } from './engineering';
@@ -479,12 +480,13 @@ function drawLayerGuideCard(
     subtitle: string;
     boxes: PalletBoxPlacement[];
     underlayBoxes?: PalletBoxPlacement[];
+    internalGaps?: PalletInternalGap[];
     pallet: PalletConfig;
     isLayer2Empty?: boolean;
     showLockColor?: boolean;
   }
 ) {
-  const { title, subtitle, boxes, underlayBoxes, pallet, isLayer2Empty, showLockColor } = opts;
+  const { title, subtitle, boxes, underlayBoxes, internalGaps, pallet, isLayer2Empty, showLockColor } = opts;
 
   setFill(doc, { r: 255, g: 255, b: 255 });
   setStroke(doc, C_LINE);
@@ -663,6 +665,57 @@ function drawLayerGuideCard(
     }
   });
 
+  // 4b. Internal Center-Void / Channel Gap Callouts (Flush Perimeter Alignment)
+  if (internalGaps && internalGaps.length > 0) {
+    for (const g of internalGaps) {
+      if (g.gapMm < 8) continue;
+      const gx = toPdfX(g.x - g.sizeX / 2);
+      const gy = toPdfY(g.z - g.sizeZ / 2);
+      const gw = Math.max(0.8, g.sizeX * scale);
+      const gh = Math.max(0.8, g.sizeZ * scale);
+      const isWide = g.gapMm > 50;
+      const gapFill: RgbTuple = isWide ? C_AMBER_LIGHT : { r: 238, g: 242, b: 255 };
+      const gapStroke: RgbTuple = isWide ? C_AMBER : C_ACCENT;
+
+      setFill(doc, gapFill);
+      setStroke(doc, gapStroke);
+      doc.setLineWidth(0.2);
+      doc.setLineDashPattern([0.7, 0.6], 0);
+      doc.rect(gx, gy, gw, gh, 'FD');
+      doc.setLineDashPattern([], 0);
+
+      // Diagonal subtle hatch inside gap rectangle if large enough
+      const step = 1.6;
+      if (gw >= 1.8 && gh >= 1.8) {
+        doc.setLineWidth(0.11);
+        for (let d = -gh; d < gw; d += step) {
+          const x1 = Math.max(gx, gx + d);
+          const y1 = Math.max(gy, gy - d);
+          const x2 = Math.min(gx + gw, gx + d + gh);
+          const y2 = Math.min(gy + gh, gy + gh - Math.max(0, gx + d + gh - (gx + gw)));
+          if (x2 > x1 + 0.1 && y2 > y1 + 0.1) {
+            doc.line(x1, y1, x2, y2);
+          }
+        }
+      }
+
+      // Crisp centered dimension callout pill
+      const label = `${Math.round(g.gapMm)}mm`;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(4.6);
+      const pillW = Math.max(5.8, doc.getTextWidth(label) + 1.8);
+      const pillH = 2.6;
+      const gcx = gx + gw / 2;
+      const gcy = gy + gh / 2;
+      setFill(doc, { r: 255, g: 255, b: 255 });
+      setStroke(doc, gapStroke);
+      doc.setLineWidth(0.18);
+      doc.roundedRect(gcx - pillW / 2, gcy - pillH / 2, pillW, pillH, 0.4, 0.4, 'FD');
+      setText(doc, gapStroke);
+      doc.text(label, gcx, gcy + 0.85, { align: 'center' });
+    }
+  }
+
   // 5. Dimension lines in mm
   const fLeft = toPdfX(foot.minX);
   const fRight = toPdfX(foot.maxX);
@@ -722,13 +775,19 @@ function drawLayerGuideCard(
 
   const countRot90 = ordered.filter((b) => b.rotated90).length;
   const count0 = ordered.length - countRot90;
+  const maxGapInLayer =
+    internalGaps && internalGaps.length > 0
+      ? Math.max(...internalGaps.map((g) => g.gapMm))
+      : 0;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(5.8);
   setText(doc, C_INK_BODY);
   doc.text(
     truncateToFit(
       doc,
-      `Isi: ${ordered.length} dus (${count0}x 0/180 deg, ${countRot90}x 90/270 deg) · Area ${foot.footprintL}x${foot.footprintW} mm`,
+      `Isi: ${ordered.length} dus (${count0}x 0/180 deg, ${countRot90}x 90/270 deg) · Area ${foot.footprintL}x${foot.footprintW} mm${
+        maxGapInLayer >= 8 ? ` · Celah ${Math.round(maxGapInLayer)} mm` : ''
+      }`,
       w - 4.8
     ),
     x + 2.4,
@@ -959,14 +1018,31 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
           : C_AMBER,
     },
     {
-      label: 'Plakban / Strap Top Layer',
-      value: pallet.useTopLayerPlakban ? 'AKTIF (Terikat)' : 'Nonaktif (Tanpa Plakban)',
-      valueColor: pallet.useTopLayerPlakban ? C_GREEN : C_INK_BODY,
+      label: 'Perataan Sisi Luar',
+      value: (() => {
+        const modeLabel =
+          activeEvaluation.perimeterAlignMode === 'flush'
+            ? 'Rata Sisi'
+            : activeEvaluation.perimeterAlignMode === 'compact'
+            ? 'Rapat'
+            : activeEvaluation.perimeterAligned
+            ? 'Auto (Rata Sisi)'
+            : 'Auto (Rapat)';
+        return `${modeLabel} · Celah Tengah ${activeEvaluation.maxInternalGapMm} mm`;
+      })(),
+      valueColor:
+        activeEvaluation.maxInternalGapMm > 50
+          ? C_AMBER
+          : activeEvaluation.perimeterAligned
+          ? C_GREEN
+          : C_INK_BODY,
     },
     {
-      label: 'Tier Sheet Pad Antar Layer',
-      value: pallet.useTierSheets ? `AKTIF (${pallet.tierSheetThicknessMm} mm)` : 'Nonaktif',
-      valueColor: pallet.useTierSheets ? C_GREEN : C_INK_BODY,
+      label: 'Plakban & Tier Sheet',
+      value: `Plakban: ${pallet.useTopLayerPlakban ? 'Aktif' : 'Tidak'} · Tier: ${
+        pallet.useTierSheets ? `Aktif (${pallet.tierSheetThicknessMm}mm)` : 'Tidak'
+      }`,
+      valueColor: pallet.useTopLayerPlakban || pallet.useTierSheets ? C_GREEN : C_INK_BODY,
     },
     {
       label: 'Slip Sheet & Corner Posts',
@@ -1178,6 +1254,7 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
     title: 'PANDUAN LAYER 1 (LAPISAN GANJIL / DASAR: 1, 3, 5...)',
     subtitle: `Pola ${l1PatternName} · ${layer1Boxes.length} dus/layer · Mulai dari sudut kiri-atas (#1 -> #${layer1Boxes.length})`,
     boxes: layer1Boxes,
+    internalGaps: activeEvaluation.oddInternalGaps,
     pallet,
     showLockColor: false,
   });
@@ -1190,6 +1267,7 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
         : 'Simulasi saat ini hanya memiliki 1 layer',
     boxes: layer2Boxes,
     underlayBoxes: layer1Boxes,
+    internalGaps: activeEvaluation.evenInternalGaps,
     pallet,
     isLayer2Empty: layer2Boxes.length === 0,
     showLockColor: true,
