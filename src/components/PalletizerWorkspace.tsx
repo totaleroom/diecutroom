@@ -8,12 +8,9 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  Eye,
-  EyeOff,
   FileDown,
   Flame,
   Layers,
-  Package,
   PanelLeftClose,
   RotateCcw,
   Ruler,
@@ -21,6 +18,7 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  Truck,
   X,
 } from 'lucide-react';
 import {
@@ -28,9 +26,11 @@ import {
   CasePackConfig,
   DEFAULT_CASE_PACK_CONFIG,
   DEFAULT_PALLET_CONFIG,
+  DEFAULT_VEHICLE_CONFIG,
   DielinePaths,
   EngineeringAnalysis,
   FLUTE_SPECS,
+  INDONESIAN_VEHICLE_PRESETS,
   PALLET_MARGIN_MAX_MM,
   PALLET_MARGIN_MIN_MM,
   PALLET_MARGIN_PRESETS,
@@ -39,14 +39,24 @@ import {
   PalletPatternEvaluation,
   PalletPatternType,
   PalletPerimeterAlignMode,
+  PalletVehicleConfig,
   PalletViewOverlayMode,
   PerfectionistSizeSuggestion,
   PerfectionistTuningReport,
-  PrimaryProductShape,
+  SteppedBoardRecommendation,
+  VehicleLayoutPreference,
+  VehicleLoadingMode,
+  VehiclePresetId,
+  VehicleStackingMode,
 } from '../types';
-import { computeBoardBurstKpa, computeSurfaceFrictionCoeff } from '../utils/engineering';
 import {
-  computeCasePackSolutions,
+  computeBoardBurstKpa,
+  computeCaseGrossWeightKg,
+  computeSurfaceFrictionCoeff,
+  formatSubstanceString,
+  getEffectiveProductNetWeightKg,
+} from '../utils/engineering';
+import {
   computeEffectivePalletDims,
   computePerfectionistTuningReport,
   computeSmartPalletAdvisor,
@@ -64,6 +74,15 @@ import {
   VECTOR_STROKE_PRESETS,
   VectorStrokePreset,
 } from '../utils/palletizerVectorExport';
+import {
+  buildVehicleConfigFromPreset,
+  comparePalletVsFloor,
+  computeSyncedPalletMaxHeight,
+  solveFloorLoading,
+  solveVehicleLoading,
+} from '../utils/vehicleLoading';
+import VehicleLoadingBlueprint from './VehicleLoadingBlueprint';
+import MobileGenieSheet from './MobileGenieSheet';
 import type {
   PalletizerWorkerRequest,
   PalletizerWorkerResponse,
@@ -140,10 +159,13 @@ interface PalletizerWorkspaceProps {
   hasMobileFloatingDock?: boolean;
   isShortLandscape?: boolean;
   focusMode?: boolean;
+  requestedExportTab?: 'engineering' | 'vector' | null;
+  onHandledExportRequest?: () => void;
 }
 
-type LeftRailTab = 'case-pack' | 'pallet';
+type LeftRailTab = 'pallet' | 'vehicle';
 type CameraPreset = 'iso' | 'front' | 'top' | 'side';
+type CanvasViewMode = '3d' | 'vehicle-2d';
 
 function createWoodPalletTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -248,7 +270,8 @@ interface PopulatePalletGroupParams {
   outerDimensions: { length: number; width: number; depth: number };
   materialColor: 'kraft' | 'white';
   inspectLayer: number | null;
-  xRayMode: boolean;
+  safetyFactor: number;
+  caseGrossKg: number;
   viewOverlayMode: PalletViewOverlayMode;
   maxAnisotropy: number;
   orientationContrast?: boolean;
@@ -261,7 +284,8 @@ function populatePalletGroup({
   outerDimensions,
   materialColor,
   inspectLayer,
-  xRayMode,
+  safetyFactor,
+  caseGrossKg,
   viewOverlayMode,
   maxAnisotropy,
   orientationContrast = false,
@@ -408,30 +432,28 @@ function populatePalletGroup({
       color: isHeatmap || orientationContrast ? '#ffffff' : undefined,
       roughness: isHeatmap ? 0.55 : orientationContrast ? 0.58 : 0.68,
       metalness: 0.04,
-      transparent: xRayMode,
-      opacity: xRayMode ? 0.36 : 1,
-      depthWrite: !xRayMode,
     });
     const topMat = new THREE.MeshStandardMaterial({
       map: topTex,
       color: isHeatmap || orientationContrast ? '#ffffff' : undefined,
       roughness: isHeatmap ? 0.48 : orientationContrast ? 0.50 : 0.56,
       metalness: 0.04,
-      transparent: xRayMode,
-      opacity: xRayMode ? 0.42 : 1,
-      depthWrite: !xRayMode,
     });
     const cartonMaterials = [sideMat, sideMat, topMat, sideMat, sideMat, sideMat];
 
     const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
     const instanced = new THREE.InstancedMesh(unitBoxGeo, cartonMaterials, visiblePlacements.length);
-    instanced.castShadow = !xRayMode;
-    instanced.receiveShadow = !xRayMode;
+    instanced.castShadow = true;
+    instanced.receiveShadow = true;
 
     const edgePositions: number[] = [];
     const pad = 0.0025;
     const baseLx = Math.max(0.01, outerDimensions.length * S - pad);
     const baseWz = Math.max(0.01, outerDimensions.width * S - pad);
+    const allowablePerBoxKgf = Math.max(
+      1,
+      activeEvaluation.effectivePalletBctKgf / Math.max(1, safetyFactor)
+    );
 
     visiblePlacements.forEach((b, idx) => {
       const sx = Math.max(0.01, b.sizeX * S - pad);
@@ -448,12 +470,15 @@ function populatePalletGroup({
       instanced.setMatrixAt(idx, _dummyObj.matrix);
 
       if (isHeatmap) {
-        if (b.lockStatus === 'locked') {
-          _tmpColor.set('#22C55E');
-        } else if (b.lockStatus === 'at-risk') {
+        const layersAbove = Math.max(0, activeEvaluation.layerCount - b.layer);
+        const loadAboveKgf = layersAbove * caseGrossKg;
+        const stressRatio = loadAboveKgf / allowablePerBoxKgf;
+        if (stressRatio > 1.0 || b.lockStatus === 'at-risk') {
           _tmpColor.set('#EF4444');
-        } else {
+        } else if (stressRatio >= 0.72 || b.lockStatus === 'column') {
           _tmpColor.set('#F59E0B');
+        } else {
+          _tmpColor.set('#22C55E');
         }
       } else if (orientationContrast) {
         const layerOdd = b.layer % 2 === 1;
@@ -516,7 +541,7 @@ function populatePalletGroup({
           ? '#6D4C2F'
           : '#64748B',
         transparent: true,
-        opacity: xRayMode ? 0.85 : orientationContrast ? 0.92 : isHeatmap ? 0.55 : 0.45,
+        opacity: orientationContrast ? 0.92 : isHeatmap ? 0.55 : 0.45,
       })
     );
     group.add(edges);
@@ -868,6 +893,8 @@ export default function PalletizerWorkspace({
   hasMobileFloatingDock = false,
   isShortLandscape = false,
   focusMode = false,
+  requestedExportTab = null,
+  onHandledExportRequest,
 }: PalletizerWorkspaceProps) {
   const casePack: CasePackConfig = config.casePack || DEFAULT_CASE_PACK_CONFIG;
   const rawPallet: PalletConfig = config.pallet || DEFAULT_PALLET_CONFIG;
@@ -881,9 +908,9 @@ export default function PalletizerWorkspace({
   );
 
   const [railTab, setRailTab] = useState<LeftRailTab>('pallet');
+  const [canvasViewMode, setCanvasViewMode] = useState<CanvasViewMode>('3d');
   const [appliedBanner, setAppliedBanner] = useState<string | null>(null);
   const [inspectLayer, setInspectLayer] = useState<number | null>(null); // null = all layers
-  const [xRayMode, setXRayMode] = useState(false);
   const [viewOverlayMode, setViewOverlayMode] = useState<PalletViewOverlayMode>('normal');
   const [activeCamPreset, setActiveCamPreset] = useState<CameraPreset>('iso');
   const [showAllCandidates, setShowAllCandidates] = useState(false);
@@ -905,44 +932,17 @@ export default function PalletizerWorkspace({
   const [vecStrokePreset, setVecStrokePreset] = useState<VectorStrokePreset>('standard');
   const [vecPreviewBg, setVecPreviewBg] = useState<'kraft' | 'white'>('kraft');
 
-  // Solve right-sizing solutions for primary products synced with effective pallet underhang zone
-  const casePackSolutions = useMemo(
+  // Berat nett produk per dus (default 1.0 kg bila kosong) + tare karton → menggerakkan BCT, Heat-Map & Rekomendasi Material
+  const effectiveNetWeightKg = getEffectiveProductNetWeightKg(config);
+  const syncedCaseGrossKg = useMemo(
     () =>
-      computeCasePackSolutions(
-        casePack,
-        config.fluteThickness,
+      computeCaseGrossWeightKg(
+        effectiveNetWeightKg,
         analysis.netBoxAreaSqm,
-        analysis.boardGsm,
-        {
-          palletLengthMm: pallet.palletLengthMm,
-          palletWidthMm: pallet.palletWidthMm,
-          allowedOverhangMm: pallet.allowedOverhangMm,
-        }
+        analysis.boardGsm
       ),
-    [
-      casePack,
-      config.fluteThickness,
-      analysis.netBoxAreaSqm,
-      analysis.boardGsm,
-      pallet.palletLengthMm,
-      pallet.palletWidthMm,
-      pallet.allowedOverhangMm,
-    ]
+    [effectiveNetWeightKg, analysis.netBoxAreaSqm, analysis.boardGsm]
   );
-
-  const safePlanIdx = Math.min(
-    Math.max(0, casePack.selectedPlanIndex || 0),
-    Math.max(0, casePackSolutions.length - 1)
-  );
-  const activeCasePlan = casePackSolutions[safePlanIdx] || null;
-
-  // Gross weight per master case synced with product count & paper gsm
-  const syncedCaseGrossKg = useMemo(() => {
-    if (activeCasePlan) return activeCasePlan.caseGrossKg;
-    const tareKg = Math.max(0.08, (analysis.netBoxAreaSqm * analysis.boardGsm) / 1000);
-    const netKg = ((casePack.unitsPerCase || 1) * (casePack.unitWeightGrams || 400)) / 1000;
-    return Math.round((tareKg + netKg) * 10) / 10;
-  }, [activeCasePlan, analysis.netBoxAreaSqm, analysis.boardGsm, casePack.unitsPerCase, casePack.unitWeightGrams]);
 
   const physicsCtx: PalletPhysicsContext = useMemo(
     () => ({
@@ -1109,14 +1109,7 @@ export default function PalletizerWorkspace({
     }
   }, [inspectLayer, activeEvaluation.layerCount]);
 
-  // Helpers for updating CasePack and Pallet config inside BoxConfig
-  const updateCasePack = (patch: Partial<CasePackConfig>) => {
-    onChange((prev) => ({
-      ...prev,
-      casePack: { ...(prev.casePack || DEFAULT_CASE_PACK_CONFIG), ...patch },
-    }));
-  };
-
+  // Helper for updating Pallet config inside BoxConfig
   const updatePallet = (patch: Partial<PalletConfig>) => {
     onChange((prev) => ({
       ...prev,
@@ -1124,35 +1117,157 @@ export default function PalletizerWorkspace({
     }));
   };
 
-  const handleApplyCasePackToCad = () => {
-    if (!activeCasePlan) return;
-    const targetL = activeCasePlan.innerL;
-    const targetW = activeCasePlan.innerW;
-    const targetD = activeCasePlan.innerD;
-    onChange((prev) => ({
-      ...prev,
-      inputMode: 'product',
-      product: {
-        ...prev.product,
-        length: Math.max(20, targetL - 2),
-        width: Math.max(20, targetW - 2),
-        depth: Math.max(20, targetD - 2),
-        tolerancePreset: 'snug',
-        clearanceL: 2,
-        clearanceW: 2,
-        clearanceD: 2,
-      },
-      dimensions: {
-        length: targetL,
-        width: targetW,
-        depth: targetD,
-      },
-      casePack: { ...(prev.casePack || DEFAULT_CASE_PACK_CONFIG) },
-    }));
-    setAppliedBanner(
-      `Diterapkan ke CAD: ${activeCasePlan.description} → ID ${targetL} × ${targetW} × ${targetD} mm`
+  // Indonesian Vehicle & Container Config + Auto Pallet Height Synchronization
+  const vehicle: PalletVehicleConfig = useMemo(
+    () => ({ ...DEFAULT_VEHICLE_CONFIG, ...(pallet.vehicle || {}) }),
+    [pallet.vehicle]
+  );
+
+  const vehicleHeightSync = useMemo(
+    () =>
+      computeSyncedPalletMaxHeight(
+        vehicle,
+        pallet,
+        paths.info.outerDimensions.depth,
+        syncedCaseGrossKg,
+        analysis.correctedBctKgf,
+        config.engineering.safetyFactor
+      ),
+    [
+      vehicle,
+      pallet,
+      paths.info.outerDimensions.depth,
+      syncedCaseGrossKg,
+      analysis.correctedBctKgf,
+      config.engineering.safetyFactor,
+    ]
+  );
+
+  const vehicleEvaluation = useMemo(() => {
+    if (!vehicle.enabled) return null;
+    return solveVehicleLoading(
+      vehicle,
+      pallet,
+      activeEvaluation,
+      analysis.correctedBctKgf,
+      config.engineering.safetyFactor
     );
-    window.setTimeout(() => setAppliedBanner(null), 4000);
+  }, [
+    vehicle,
+    pallet,
+    activeEvaluation,
+    analysis.correctedBctKgf,
+    config.engineering.safetyFactor,
+  ]);
+
+  const floorEvaluation = useMemo(() => {
+    if (!vehicle.enabled) return null;
+    return solveFloorLoading(
+      vehicle,
+      paths.info.outerDimensions,
+      syncedCaseGrossKg,
+      casePack.unitsPerCase || 1,
+      analysis.correctedBctKgf,
+      config.engineering.safetyFactor
+    );
+  }, [
+    vehicle,
+    paths.info.outerDimensions,
+    syncedCaseGrossKg,
+    casePack.unitsPerCase,
+    analysis.correctedBctKgf,
+    config.engineering.safetyFactor,
+  ]);
+
+  const palletVsFloorComparison = useMemo(() => {
+    if (!vehicleEvaluation || !floorEvaluation) return null;
+    return comparePalletVsFloor(
+      vehicleEvaluation,
+      floorEvaluation,
+      activeEvaluation.bctStatus !== 'overload'
+    );
+  }, [vehicleEvaluation, floorEvaluation, activeEvaluation.bctStatus]);
+
+  const vehicleLoadingMode: VehicleLoadingMode = vehicle.loadingMode ?? 'palletized';
+
+  // Handle external Export PDF popover trigger from App Header
+  useEffect(() => {
+    if (!requestedExportTab) return;
+    setReportProjectName((prev) => prev || config.metadata.productName || '');
+    setExportPdfError(null);
+    setExportModalTab(requestedExportTab);
+    setPdfModalOpen(true);
+    onHandledExportRequest?.();
+  }, [requestedExportTab, config.metadata.productName, onHandledExportRequest]);
+
+  // Keep pallet.maxStackHeightMm synced whenever vehicle auto-sync is enabled (Palletized mode only)
+  useEffect(() => {
+    if (!vehicle.enabled || !vehicle.autoSyncPalletHeight || vehicleLoadingMode === 'floor-loading') return;
+    const targetH = Math.max(500, vehicleHeightSync.targetMaxStackHeightMm);
+    if (Math.abs(pallet.maxStackHeightMm - targetH) >= 1) {
+      updatePallet({ maxStackHeightMm: targetH });
+    }
+  }, [
+    vehicle.enabled,
+    vehicle.autoSyncPalletHeight,
+    vehicleLoadingMode,
+    vehicleHeightSync.targetMaxStackHeightMm,
+    pallet.maxStackHeightMm,
+  ]);
+
+  // Return to 3D view if user turns off vehicle simulation while viewing 2D blueprint
+  useEffect(() => {
+    if (!vehicle.enabled && canvasViewMode === 'vehicle-2d') {
+      setCanvasViewMode('3d');
+    }
+  }, [vehicle.enabled, canvasViewMode]);
+
+  const updateVehicle = (patch: Partial<PalletVehicleConfig>) => {
+    onChange((prev) => {
+      const prevPallet = prev.pallet || DEFAULT_PALLET_CONFIG;
+      const nextVehicle: PalletVehicleConfig = {
+        ...DEFAULT_VEHICLE_CONFIG,
+        ...(prevPallet.vehicle || {}),
+        ...patch,
+      };
+      let nextMaxH = prevPallet.maxStackHeightMm;
+      if (
+        nextVehicle.enabled &&
+        nextVehicle.autoSyncPalletHeight &&
+        (nextVehicle.loadingMode ?? 'palletized') !== 'floor-loading'
+      ) {
+        const synced = computeSyncedPalletMaxHeight(
+          nextVehicle,
+          prevPallet,
+          paths.info.outerDimensions.depth,
+          syncedCaseGrossKg,
+          analysis.correctedBctKgf,
+          config.engineering.safetyFactor
+        );
+        nextMaxH = Math.max(500, synced.targetMaxStackHeightMm);
+      }
+      return {
+        ...prev,
+        pallet: {
+          ...prevPallet,
+          maxStackHeightMm: nextMaxH,
+          vehicle: nextVehicle,
+        },
+      };
+    });
+  };
+
+  const handleSelectVehiclePreset = (presetId: VehiclePresetId) => {
+    const built = buildVehicleConfigFromPreset(presetId, {
+      enabled: vehicle.enabled,
+      loadingMode: vehicle.loadingMode ?? 'palletized',
+      floorWallClearanceMm: vehicle.floorWallClearanceMm ?? 15,
+      stackingMode: vehicle.stackingMode,
+      layoutPreference: vehicle.layoutPreference,
+      autoSyncPalletHeight: vehicle.autoSyncPalletHeight,
+      doubleStackGapMm: vehicle.doubleStackGapMm,
+    });
+    updateVehicle(built);
   };
 
   const handleApplyPerfectionistToCad = (sug: PerfectionistSizeSuggestion) => {
@@ -1176,29 +1291,32 @@ export default function PalletizerWorkspace({
     window.setTimeout(() => setAppliedBanner(null), 4500);
   };
 
-  const handleApplyBoardAdvice = () => {
-    const adv = tuningReport.boardAdvice;
-    if (!adv) return;
-    const fSpec = FLUTE_SPECS[adv.fluteId] || FLUTE_SPECS.C;
-    const isDw = fSpec.wall === 'double-wall';
-    onChange((prev) => ({
-      ...prev,
-      boardGrade: isDw ? 'double-wall' : 'single-wall',
-      fluteThickness: fSpec.thickness,
-      engineering: {
+  const handleApplyBoardCandidate = (cand: SteppedBoardRecommendation) => {
+    const fSpec = FLUTE_SPECS[cand.fluteId] || FLUTE_SPECS.C;
+    const isDw = cand.boardGrade === 'double-wall';
+    onChange((prev) => {
+      const nextEng = {
         ...prev.engineering,
-        fluteId: adv.fluteId,
-        topLayer: adv.topLayer,
-        mediumLayer: adv.mediumLayer,
-        bottomLayer: adv.bottomLayer,
-      },
-      metadata: {
-        ...prev.metadata,
-        materialSubstance: `${adv.topLayer}/${adv.mediumLayer}/${adv.bottomLayer}`,
-      },
-    }));
+        fluteId: cand.fluteId,
+        topLayer: cand.topLayer,
+        mediumLayer: cand.mediumLayer,
+        centerLayer: isDw && cand.centerLayer ? cand.centerLayer : prev.engineering.centerLayer,
+        mediumLayer2: isDw && cand.mediumLayer2 ? cand.mediumLayer2 : prev.engineering.mediumLayer2,
+        bottomLayer: cand.bottomLayer,
+      };
+      return {
+        ...prev,
+        boardGrade: cand.boardGrade,
+        fluteThickness: fSpec.thickness,
+        engineering: nextEng,
+        metadata: {
+          ...prev.metadata,
+          materialSubstance: formatSubstanceString(nextEng, cand.boardGrade),
+        },
+      };
+    });
     setAppliedBanner(
-      `Resep Kertas Diperkuat: ${adv.recommendedRecipe} · Burst ${adv.burstKpa} kPa`
+      `Spec Diterapkan (${cand.tierLabel}): ${cand.recipe} · Max ${cand.maxSafeStackLoadKgf} kgf`
     );
     window.setTimeout(() => setAppliedBanner(null), 4500);
   };
@@ -1247,11 +1365,11 @@ export default function PalletizerWorkspace({
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#f1f3f6');
-    scene.fog = new THREE.Fog('#f1f3f6', 6, 16);
+    scene.fog = new THREE.Fog('#f1f3f6', 8, 22);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.05, 50);
-    camera.position.set(2.45, 1.95, 2.55);
+    camera.position.set(3.45, 2.65, 3.65);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
@@ -1319,7 +1437,7 @@ export default function PalletizerWorkspace({
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.08;
     controls.minDistance = 0.8;
-    controls.maxDistance = 8.5;
+    controls.maxDistance = 12;
     controls.maxPolarAngle = Math.PI / 2 - 0.02;
     controls.update();
     controlsRef.current = controls;
@@ -1473,19 +1591,29 @@ export default function PalletizerWorkspace({
       outerDimensions: paths.info.outerDimensions,
       materialColor: config.materialColor,
       inspectLayer,
-      xRayMode,
+      safetyFactor: config.engineering.safetyFactor,
+      caseGrossKg: syncedCaseGrossKg,
       viewOverlayMode,
       maxAnisotropy: maxAniso,
     });
 
     requestRenderRef.current();
-  }, [pallet, activeEvaluation, inspectLayer, xRayMode, viewOverlayMode, config.materialColor, paths.info.outerDimensions]);
+  }, [
+    pallet,
+    activeEvaluation,
+    inspectLayer,
+    config.engineering.safetyFactor,
+    syncedCaseGrossKg,
+    viewOverlayMode,
+    config.materialColor,
+    paths.info.outerDimensions,
+  ]);
 
   const setCameraPreset = (preset: CameraPreset) => {
     setActiveCamPreset(preset);
     const stackH = Math.max(0.6, activeEvaluation.totalStackHeightMm * 0.001);
     const midY = stackH * 0.46;
-    const dist = Math.max(2.15, stackH * 1.48);
+    const dist = Math.max(3.05, stackH * 2.05);
     const anim = cameraAnimRef.current;
     anim.target.set(0, midY, 0);
     if (preset === 'iso') {
@@ -1499,12 +1627,6 @@ export default function PalletizerWorkspace({
     }
     anim.active = true;
     requestRenderRef.current();
-  };
-
-  const handleOpenPdfModal = () => {
-    setExportPdfError(null);
-    setReportProjectName((prev) => prev || config.metadata.productName || '');
-    setPdfModalOpen(true);
   };
 
   const vectorPreviewScene = useMemo(() => {
@@ -1727,7 +1849,8 @@ export default function PalletizerWorkspace({
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
         inspectLayer: null,
-        xRayMode: false,
+        safetyFactor: config.engineering.safetyFactor,
+        caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode: 'normal',
         maxAnisotropy: maxAniso,
         orientationContrast: true,
@@ -1759,7 +1882,8 @@ export default function PalletizerWorkspace({
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
         inspectLayer: null,
-        xRayMode: false,
+        safetyFactor: config.engineering.safetyFactor,
+        caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode: 'lock-heatmap',
         maxAnisotropy: maxAniso,
         orientationContrast: false,
@@ -1787,6 +1911,10 @@ export default function PalletizerWorkspace({
           isoAnchors,
           topAnchors,
         },
+        vehicle: vehicle.enabled ? vehicle : undefined,
+        vehicleEvaluation: vehicle.enabled ? vehicleEvaluation : undefined,
+        floorEvaluation: vehicle.enabled ? floorEvaluation : undefined,
+        palletVsFloorComparison: vehicle.enabled ? palletVsFloorComparison : undefined,
       });
 
       setPdfModalOpen(false);
@@ -1818,7 +1946,8 @@ export default function PalletizerWorkspace({
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
         inspectLayer,
-        xRayMode,
+        safetyFactor: config.engineering.safetyFactor,
+        caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode,
         maxAnisotropy: maxAniso,
         orientationContrast: false,
@@ -1850,13 +1979,15 @@ export default function PalletizerWorkspace({
 
   const BctStatusIcon = bctStatusMeta.icon;
 
-  const renderLeftRail = () => (
+  const renderLeftRail = (isCenteredMobile = false) => (
     <aside
       className={`surface-rail ${
-        isOverlayRail
-          ? 'relative z-10 w-[min(336px,92vw)] h-full shadow-[var(--shadow-modal)]'
-          : 'w-[316px] xl:w-[336px] h-full'
-      } bg-[var(--surface-top)] border-r-[0.5px] border-[var(--line)] flex flex-col shrink-0 min-h-0`}
+        isCenteredMobile
+          ? 'w-full h-full border-r-0'
+          : isOverlayRail
+          ? 'relative z-10 w-[min(336px,92vw)] h-full shadow-[var(--shadow-modal)] border-r-[0.5px] border-[var(--line)]'
+          : 'w-[316px] xl:w-[336px] h-full border-r-[0.5px] border-[var(--line)]'
+      } bg-[var(--surface-top)] flex flex-col shrink-0 min-h-0`}
     >
       <div className="p-3 border-b-[0.5px] border-[var(--line)] shrink-0 flex items-center gap-2">
         <div className="flex-1 min-w-0">
@@ -1867,8 +1998,8 @@ export default function PalletizerWorkspace({
             size="compact"
             ariaLabel="Palletizer configuration section"
             options={[
-              { value: 'pallet', label: 'Pallet & BCT' },
-              { value: 'case-pack', label: 'Case Pack' },
+              { value: 'pallet', label: 'Palet' },
+              { value: 'vehicle', label: vehicle.enabled ? 'Armada ●' : 'Armada' },
             ]}
           />
         </div>
@@ -1886,285 +2017,502 @@ export default function PalletizerWorkspace({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3.5 py-3 space-y-4">
-          {railTab === 'case-pack' ? (
+          {railTab === 'vehicle' ? (
             <>
-              <TactileSection title="Produk Primer & Bulge">
+              <TactileSection title="Armada & Kontainer Indonesia">
                 <div className="space-y-3">
+                  <TactileToggle
+                    checked={vehicle.enabled}
+                    onChange={(enabled) => updateVehicle({ enabled })}
+                    label="Aktifkan Simulasi Kontainer / Truk"
+                  />
+
                   <div>
                     <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                      Bentuk Produk Primer
+                      Metode Muat Armada
                     </label>
-                    <TactileSegmented
-                      value={casePack.shape}
-                      onChange={(s: PrimaryProductShape) => updateCasePack({ shape: s })}
-                      fullWidth
+                    <TactileSegmented<VehicleLoadingMode>
+                      value={vehicleLoadingMode}
+                      onChange={(loadingMode) => updateVehicle({ loadingMode })}
                       size="compact"
-                      ariaLabel="Primary product shape"
+                      fullWidth
+                      ariaLabel="Metode muat armada palet atau floor loading"
                       options={[
-                        { value: 'carton', label: 'Karton' },
-                        { value: 'cylinder', label: 'Silinder' },
-                        { value: 'pouch', label: 'Pouch' },
+                        { value: 'palletized', label: 'Pakai Palet' },
+                        { value: 'floor-loading', label: 'Floor Loading' },
                       ]}
                     />
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        {casePack.shape === 'cylinder' ? 'Ø (mm)' : 'P (mm)'}
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        min={10}
-                        max={800}
-                        value={casePack.unitLengthMm}
-                        onChange={(e) =>
-                          updateCasePack({
-                            unitLengthMm: Math.max(10, Number(e.target.value) || 10),
-                          })
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        L (mm)
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        min={10}
-                        max={800}
-                        disabled={casePack.shape === 'cylinder'}
-                        value={
-                          casePack.shape === 'cylinder'
-                            ? casePack.unitLengthMm
-                            : casePack.unitWidthMm
-                        }
-                        onChange={(e) =>
-                          updateCasePack({
-                            unitWidthMm: Math.max(10, Number(e.target.value) || 10),
-                          })
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        T (mm)
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        min={10}
-                        max={800}
-                        value={casePack.unitDepthMm}
-                        onChange={(e) =>
-                          updateCasePack({
-                            unitDepthMm: Math.max(10, Number(e.target.value) || 10),
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Berat Unit (gram)
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        min={1}
-                        max={50000}
-                        value={casePack.unitWeightGrams}
-                        onChange={(e) =>
-                          updateCasePack({
-                            unitWeightGrams: Math.max(1, Number(e.target.value) || 1),
-                          })
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Isi / Master Dus
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        min={1}
-                        max={200}
-                        value={casePack.unitsPerCase}
-                        onChange={(e) =>
-                          updateCasePack({
-                            unitsPerCase: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
-                            selectedPlanIndex: 0,
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-
                   <div>
-                    <div className="flex items-center justify-between text-[11px] text-[var(--ink-10)] mb-1">
-                      <span>Bulge / Compression (+/- mm)</span>
-                      <span className="font-mono tabular-nums text-[var(--ink-11)]">
-                        {casePack.bulgeL >= 0 ? `+${casePack.bulgeL}` : casePack.bulgeL} /{' '}
-                        {casePack.bulgeW >= 0 ? `+${casePack.bulgeW}` : casePack.bulgeW} /{' '}
-                        {casePack.bulgeD >= 0 ? `+${casePack.bulgeD}` : casePack.bulgeD} mm
-                      </span>
+                    <label className="block text-[11px] text-[var(--ink-10)] mb-1">
+                      Pilih Kontainer / Truk
+                    </label>
+                    <TactileSelect
+                      value={vehicle.presetId}
+                      onChange={(id) => handleSelectVehiclePreset(id as VehiclePresetId)}
+                      ariaLabel="Pilih preset kontainer atau truk Indonesia"
+                      options={[
+                        ...INDONESIAN_VEHICLE_PRESETS.map((p) => ({
+                          value: p.id,
+                          label: p.shortLabel,
+                          hint: `${p.internalLengthMm}×${p.internalWidthMm}×${p.internalHeightMm} mm · ${(p.maxPayloadKg / 1000).toFixed(1)}t`,
+                        })),
+                        {
+                          value: 'custom' as VehiclePresetId,
+                          label: 'Armada Kustom (Edit Bebas)',
+                          hint: 'Masukkan ukuran aktual karoseri/kontainer',
+                        },
+                      ]}
+                    />
+                  </div>
+
+                  {vehicle.presetId !== 'custom' && (
+                    <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--ink-2)] px-2.5 py-2 text-[10.5px] leading-[15px] text-[var(--ink-11)]">
+                      {
+                        INDONESIAN_VEHICLE_PRESETS.find((p) => p.id === vehicle.presetId)
+                          ?.varianceNote
+                      }
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-[var(--ink-12)]">
+                      Dimensi Dalam Aktual (Editable · mm)
                     </div>
                     <div className="grid grid-cols-3 gap-2">
-                      <TactileInputWell
-                        type="number"
-                        min={-25}
-                        max={40}
-                        step={0.5}
-                        value={casePack.bulgeL}
-                        onChange={(e) => updateCasePack({ bulgeL: Number(e.target.value) || 0 })}
-                        title="Bulge Panjang (positif mengembang, negatif kompresi)"
-                      />
-                      <TactileInputWell
-                        type="number"
-                        min={-25}
-                        max={40}
-                        step={0.5}
-                        disabled={casePack.shape === 'cylinder'}
-                        value={casePack.shape === 'cylinder' ? casePack.bulgeL : casePack.bulgeW}
-                        onChange={(e) => updateCasePack({ bulgeW: Number(e.target.value) || 0 })}
-                        title="Bulge Lebar"
-                      />
-                      <TactileInputWell
-                        type="number"
-                        min={-25}
-                        max={40}
-                        step={0.5}
-                        value={casePack.bulgeD}
-                        onChange={(e) => updateCasePack({ bulgeD: Number(e.target.value) || 0 })}
-                        title="Bulge Tinggi"
-                      />
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Panjang
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1500}
+                          max={16000}
+                          step={50}
+                          value={vehicle.internalLengthMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              presetId: 'custom',
+                              internalLengthMm: Math.max(1500, Number(e.target.value) || 3000),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Lebar
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1200}
+                          max={3200}
+                          step={10}
+                          value={vehicle.internalWidthMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              presetId: 'custom',
+                              internalWidthMm: Math.max(1200, Number(e.target.value) || 2000),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Tinggi
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1200}
+                          max={3500}
+                          step={10}
+                          value={vehicle.internalHeightMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              presetId: 'custom',
+                              internalHeightMm: Math.max(1200, Number(e.target.value) || 2000),
+                            })
+                          }
+                        />
+                      </div>
                     </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Lebar Pintu
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1000}
+                          max={3200}
+                          step={10}
+                          value={vehicle.doorWidthMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              presetId: 'custom',
+                              doorWidthMm: Math.max(1000, Number(e.target.value) || 2000),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Tinggi Pintu
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1000}
+                          max={3500}
+                          step={10}
+                          value={vehicle.doorHeightMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              presetId: 'custom',
+                              doorHeightMm: Math.max(1000, Number(e.target.value) || 2000),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Payload (kg)
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={500}
+                          max={40000}
+                          step={100}
+                          value={vehicle.maxPayloadKg}
+                          onChange={(e) =>
+                            updateVehicle({
+                              maxPayloadKg: Math.max(500, Number(e.target.value) || 5000),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {vehicle.category === 'container-reefer' && (
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Batas Red Load Line Reefer (mm)
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={1200}
+                          max={2800}
+                          step={10}
+                          value={vehicle.reeferLoadLineMm ?? 2160}
+                          onChange={(e) =>
+                            updateVehicle({
+                              reeferLoadLineMm: Math.max(1200, Number(e.target.value) || 2160),
+                            })
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </TactileSection>
 
-              <TactileSection title="Sekat Partisi & Orientasi">
-                <div className="space-y-3">
+              <TactileSection
+                title={
+                  vehicleLoadingMode === 'floor-loading'
+                    ? 'Clearance Floor Loading & Karoseri'
+                    : 'Clearance Forklift & Karoseri'
+                }
+              >
+                <div className="space-y-2.5">
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Tebal Sekat Sel (mm)
+                      <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                        {vehicleLoadingMode === 'floor-loading'
+                          ? 'Celah Dinding (mm/sisi)'
+                          : 'Clearance Sisi (mm/sisi)'}
                       </label>
-                      <TactileInputWell
-                        type="number"
-                        min={0}
-                        max={20}
-                        step={0.5}
-                        value={casePack.dividerThicknessMm}
-                        onChange={(e) =>
-                          updateCasePack({
-                            dividerThicknessMm: Math.max(0, Number(e.target.value) || 0),
-                          })
-                        }
-                      />
+                      {vehicleLoadingMode === 'floor-loading' ? (
+                        <TactileInputWell
+                          type="number"
+                          min={5}
+                          max={80}
+                          step={5}
+                          value={vehicle.floorWallClearanceMm ?? 15}
+                          onChange={(e) =>
+                            updateVehicle({
+                              floorWallClearanceMm: Math.max(5, Number(e.target.value) || 15),
+                            })
+                          }
+                        />
+                      ) : (
+                        <TactileInputWell
+                          type="number"
+                          min={0}
+                          max={120}
+                          step={5}
+                          value={vehicle.sideWallClearanceMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              sideWallClearanceMm: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                        />
+                      )}
                     </div>
                     <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Pad Antar Tier (mm)
+                      <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                        Toleransi Karoseri (mm)
                       </label>
                       <TactileInputWell
                         type="number"
                         min={0}
-                        max={20}
-                        step={0.5}
-                        value={casePack.layerPadThicknessMm}
+                        max={100}
+                        step={5}
+                        value={vehicle.nonStandardToleranceMm}
                         onChange={(e) =>
-                          updateCasePack({
-                            layerPadThicknessMm: Math.max(0, Number(e.target.value) || 0),
+                          updateVehicle({
+                            nonStandardToleranceMm: Math.max(0, Number(e.target.value) || 0),
                           })
                         }
                       />
                     </div>
                   </div>
 
-                  <TactileToggle
-                    checked={casePack.uprightOnly}
-                    onChange={(v) => updateCasePack({ uprightOnly: v })}
-                    label="Wajib posisi produk berdiri (Upright)"
-                  />
-
-                  {casePack.shape === 'cylinder' && (
-                    <TactileToggle
-                      checked={casePack.cylinderStagger}
-                      onChange={(v) => updateCasePack({ cylinderStagger: v })}
-                      label="Susunan nested sarang madu (Hemat ~13%)"
-                    />
+                  {vehicleLoadingMode === 'floor-loading' ? (
+                    <div>
+                      <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                        Margin Pintu Belakang (mm)
+                      </label>
+                      <TactileInputWell
+                        type="number"
+                        min={40}
+                        max={200}
+                        step={10}
+                        value={vehicle.rearDoorClearanceMm}
+                        onChange={(e) =>
+                          updateVehicle({
+                            rearDoorClearanceMm: Math.max(40, Number(e.target.value) || 80),
+                          })
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Celah Palet
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={0}
+                          max={80}
+                          step={5}
+                          value={vehicle.palletGapMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              palletGapMm: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Margin Pintu
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={0}
+                          max={200}
+                          step={10}
+                          value={vehicle.rearDoorClearanceMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              rearDoorClearanceMm: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Angkat Garpu
+                        </label>
+                        <TactileInputWell
+                          type="number"
+                          min={40}
+                          max={250}
+                          step={10}
+                          value={vehicle.forkliftLiftClearanceMm}
+                          onChange={(e) =>
+                            updateVehicle({
+                              forkliftLiftClearanceMm: Math.max(40, Number(e.target.value) || 100),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
                   )}
                 </div>
               </TactileSection>
 
-              <TactileSection title={`Solusi Right-Sizing (${casePackSolutions.length})`}>
-                <div className="space-y-2">
-                  {casePackSolutions.length === 0 ? (
-                    <div className="text-[12px] text-[var(--ink-10)] py-2">
-                      Tidak ada kombinasi valid untuk ukuran & jumlah ini. Coba ubah jumlah isi/dus atau izinkan rotasi produk.
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
-                      {casePackSolutions.map((sol, idx) => {
-                        const selected = idx === safePlanIdx;
-                        return (
-                          <button
-                            key={sol.id}
-                            type="button"
-                            onClick={() => updateCasePack({ selectedPlanIndex: idx })}
-                            className={`w-full text-left px-2.5 py-2 rounded-[var(--radius-control)] border-[0.5px] transition-colors ${
-                              selected
-                                ? 'bg-[var(--ink-12)] text-white border-[var(--ink-12)]'
-                                : 'bg-[var(--surface-top)] text-[var(--ink-12)] border-[var(--line)] hover:bg-[var(--ink-2)]'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2 text-[12px] font-medium">
-                              <span className="truncate">{sol.description}</span>
-                              <span
-                                className={`font-mono tabular-nums text-[11px] shrink-0 ${
-                                  selected ? 'text-white/90' : 'text-[var(--ink-10)]'
-                                }`}
-                              >
-                                {sol.palletAreaEstPct}% Pallet
-                              </span>
-                            </div>
-                            <div
-                              className={`mt-0.5 flex items-center justify-between text-[11px] font-mono tabular-nums ${
-                                selected ? 'text-white/75' : 'text-[var(--ink-10)]'
-                              }`}
-                            >
-                              <span>
-                                ID {sol.innerL}×{sol.innerW}×{sol.innerD} mm
-                              </span>
-                              <span>{sol.caseGrossKg} kg/dus</span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+              <TactileSection title="Tata Letak & Perbandingan Kapasitas">
+                <div className="space-y-2.5">
+                  {vehicleLoadingMode === 'palletized' && (
+                    <>
+                      <TactileToggle
+                        checked={vehicle.autoSyncPalletHeight}
+                        onChange={(autoSyncPalletHeight) => updateVehicle({ autoSyncPalletHeight })}
+                        label="Auto-Sinkron Tinggi Tumpukan Palet"
+                      />
+
+                      <div>
+                        <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                          Mode Tumpukan Palet (Tier)
+                        </label>
+                        <TactileSegmented<VehicleStackingMode>
+                          value={vehicle.stackingMode}
+                          onChange={(stackingMode) => updateVehicle({ stackingMode })}
+                          size="compact"
+                          fullWidth
+                          ariaLabel="Mode tumpukan palet dalam armada"
+                          options={[
+                            { value: 'auto', label: 'Auto' },
+                            { value: 'single', label: '1 Tier' },
+                            { value: 'double', label: '2 Tier' },
+                          ]}
+                        />
+                      </div>
+                    </>
                   )}
 
-                  {activeCasePlan && (
-                    <div className="pt-1 space-y-2">
-                      <TactileButton
-                        type="button"
-                        variant="primary"
-                        size="default"
-                        onClick={handleApplyCasePackToCad}
-                        className="w-full justify-center"
-                      >
-                        <Package size={14} />
-                        <span>Terapkan ke Dieline CAD</span>
-                        <ArrowRight size={14} />
-                      </TactileButton>
+                  <div>
+                    <label className="block text-[10.5px] text-[var(--ink-10)] mb-1">
+                      {vehicleLoadingMode === 'floor-loading'
+                        ? 'Pola Susunan Karton di Lantai'
+                        : 'Pola Susunan Palet di Lantai'}
+                    </label>
+                    <TactileSegmented<VehicleLayoutPreference>
+                      value={vehicle.layoutPreference}
+                      onChange={(layoutPreference) => updateVehicle({ layoutPreference })}
+                      size="compact"
+                      fullWidth
+                      ariaLabel="Pola susunan di lantai kendaraan"
+                      options={[
+                        { value: 'auto', label: 'Auto' },
+                        { value: 'lengthwise', label: '0°' },
+                        { value: 'crosswise', label: '90°' },
+                        { value: 'mixed', label: 'Campur' },
+                      ]}
+                    />
+                  </div>
 
-                      {appliedBanner && (
-                        <div className="rounded-[var(--radius-control)] bg-[var(--green-3)] text-[var(--green-11)] px-2.5 py-1.5 text-[11px] flex items-center gap-1.5">
-                          <Check size={13} className="shrink-0" />
-                          <span>{appliedBanner}</span>
-                        </div>
-                      )}
+                  {/* Perbandingan Kapasitas Palet vs Floor Loading */}
+                  {vehicle.enabled && vehicleEvaluation && floorEvaluation && palletVsFloorComparison ? (
+                    <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-2.5 space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-[var(--ink-12)]">
+                          Palet vs Floor Loading
+                        </span>
+                        <span
+                          className={`font-mono tabular-nums font-semibold ${
+                            palletVsFloorComparison.deltaCases > 0
+                              ? 'text-[var(--green-11)]'
+                              : 'text-[var(--ink-11)]'
+                          }`}
+                        >
+                          {palletVsFloorComparison.deltaCases >= 0 ? '+' : ''}
+                          {palletVsFloorComparison.deltaCasesPct}% dus
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5 font-mono tabular-nums text-[10.5px]">
+                        <button
+                          type="button"
+                          onClick={() => updateVehicle({ loadingMode: 'palletized' })}
+                          className={`text-left rounded-[var(--radius-sm)] border-[0.5px] p-2 cursor-pointer transition-colors ${
+                            vehicleLoadingMode === 'palletized'
+                              ? 'bg-[var(--ink-12)] text-white border-[var(--ink-12)]'
+                              : 'bg-[var(--ink-2)] text-[var(--ink-12)] border-[var(--line)] hover:bg-[var(--ink-3)]'
+                          }`}
+                        >
+                          <div
+                            className={`text-[10px] font-sans font-medium ${
+                              vehicleLoadingMode === 'palletized' ? 'text-white/75' : 'text-[var(--ink-10)]'
+                            }`}
+                          >
+                            Pakai Palet ({vehicleEvaluation.totalPallets} plt)
+                          </div>
+                          <div className="text-[13px] font-bold mt-0.5">
+                            {palletVsFloorComparison.palletCases.toLocaleString('id-ID')} dus
+                          </div>
+                          <div
+                            className={`text-[10px] mt-0.5 ${
+                              vehicleLoadingMode === 'palletized' ? 'text-white/80' : 'text-[var(--ink-10)]'
+                            }`}
+                          >
+                            Vol {palletVsFloorComparison.palletVolumePct}% · ~{palletVsFloorComparison.palletLoadMinutesEst}m
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => updateVehicle({ loadingMode: 'floor-loading' })}
+                          className={`text-left rounded-[var(--radius-sm)] border-[0.5px] p-2 cursor-pointer transition-colors ${
+                            vehicleLoadingMode === 'floor-loading'
+                              ? 'bg-[var(--ink-12)] text-white border-[var(--ink-12)]'
+                              : 'bg-[var(--ink-2)] text-[var(--ink-12)] border-[var(--line)] hover:bg-[var(--ink-3)]'
+                          }`}
+                        >
+                          <div
+                            className={`text-[10px] font-sans font-medium ${
+                              vehicleLoadingMode === 'floor-loading' ? 'text-white/75' : 'text-[var(--ink-10)]'
+                            }`}
+                          >
+                            Floor ({floorEvaluation.layersLoaded} lyr)
+                          </div>
+                          <div className="text-[13px] font-bold mt-0.5">
+                            {palletVsFloorComparison.floorCases.toLocaleString('id-ID')} dus
+                          </div>
+                          <div
+                            className={`text-[10px] mt-0.5 ${
+                              vehicleLoadingMode === 'floor-loading' ? 'text-white/80' : 'text-[var(--ink-10)]'
+                            }`}
+                          >
+                            Vol {palletVsFloorComparison.floorVolumePct}% · SF {floorEvaluation.bottomLayerSafetyFactor}:1
+                          </div>
+                        </button>
+                      </div>
+
+                      <div className="text-[10.5px] leading-[15px] text-[var(--ink-10)] pt-1 border-t-[0.5px] border-[var(--line)]">
+                        {palletVsFloorComparison.recommendationNote}
+                      </div>
+
+                      <div className="pt-0.5">
+                        <TactileButton
+                          type="button"
+                          variant={canvasViewMode === 'vehicle-2d' ? 'primary' : 'secondary'}
+                          size="compact"
+                          className="w-full justify-center"
+                          onClick={() =>
+                            setCanvasViewMode((m) => (m === 'vehicle-2d' ? '3d' : 'vehicle-2d'))
+                          }
+                        >
+                          <Truck size={13} />
+                          <span>
+                            {canvasViewMode === 'vehicle-2d'
+                              ? 'Kembali ke 3D Palet'
+                              : 'Buka Denah 2D Top & Side View'}
+                          </span>
+                        </TactileButton>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-2.5 space-y-1 text-[11px]">
+                      <div className="font-medium text-[var(--ink-12)]">
+                        {vehicleHeightSync.summaryText}
+                      </div>
+                      <div className="text-[10.5px] text-[var(--ink-10)]">
+                        Aktifkan sakelar di atas untuk membandingkan Palet vs Floor Loading dan membuka denah 2D.
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2172,8 +2520,8 @@ export default function PalletizerWorkspace({
             </>
           ) : (
             <>
-              <TactileSection title="Master Case Aktif (Sync CAD)">
-                <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] px-3 py-2 text-[12px] space-y-1">
+              <TactileSection title="Master Case & Berat Produk">
+                <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] px-3 py-2 text-[12px] space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--ink-10)]">Box OD (L×W×D)</span>
                     <span className="font-mono tabular-nums text-[var(--ink-12)] font-medium">
@@ -2182,11 +2530,49 @@ export default function PalletizerWorkspace({
                       {Math.round(paths.info.outerDimensions.depth)} mm
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[var(--ink-10)]">Berat Kotor Dus</span>
-                    <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                      {syncedCaseGrossKg} kg ({casePack.unitsPerCase} pcs)
-                    </span>
+
+                  <div className="pt-1.5 border-t-[0.5px] border-[var(--line)] space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-medium text-[var(--ink-11)]">
+                        Berat Nett Produk / Dus
+                      </label>
+                      <span className="text-[11px] font-mono tabular-nums text-[var(--ink-10)]">
+                        Kotor ~{syncedCaseGrossKg} kg
+                      </span>
+                    </div>
+                    <TactileInputWell
+                      type="number"
+                      mono
+                      min={0.1}
+                      max={200}
+                      step="0.1"
+                      placeholder="1.0"
+                      value={config.product.netWeightKg ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim();
+                        if (raw === '') {
+                          onChange((prev) => ({
+                            ...prev,
+                            product: { ...prev.product, netWeightKg: undefined },
+                          }));
+                          return;
+                        }
+                        const parsed = Number(raw);
+                        if (Number.isFinite(parsed) && parsed >= 0) {
+                          onChange((prev) => ({
+                            ...prev,
+                            product: {
+                              ...prev.product,
+                              netWeightKg: Math.min(200, Math.round(parsed * 100) / 100),
+                            },
+                          }));
+                        }
+                      }}
+                      suffix="kg"
+                    />
+                    <p className="text-[10.5px] leading-[14px] text-[var(--ink-10)]">
+                      Default 1.0 kg bila kosong · Menggerakkan heat-map &amp; rekomendasi material.
+                    </p>
                   </div>
                 </div>
               </TactileSection>
@@ -2279,8 +2665,18 @@ export default function PalletizerWorkspace({
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] text-[var(--ink-10)] mb-1">
-                        Max Tinggi (mm)
+                      <label className="flex items-center justify-between gap-1 text-[11px] text-[var(--ink-10)] mb-1">
+                        <span>Max Tinggi (mm)</span>
+                        {vehicle.enabled && vehicle.autoSyncPalletHeight && (
+                          <button
+                            type="button"
+                            onClick={() => setRailTab('vehicle')}
+                            className="text-[9.5px] font-medium text-[var(--accent-10)] hover:underline cursor-pointer"
+                            title="Disinkronkan otomatis dari tinggi pintu/armada aktif"
+                          >
+                            Auto Armada
+                          </button>
+                        )}
                       </label>
                       <TactileInputWell
                         type="number"
@@ -2288,11 +2684,24 @@ export default function PalletizerWorkspace({
                         max={2800}
                         step={50}
                         value={pallet.maxStackHeightMm}
-                        onChange={(e) =>
-                          updatePallet({
-                            maxStackHeightMm: Math.max(500, Number(e.target.value) || 1800),
-                          })
-                        }
+                        onChange={(e) => {
+                          const val = Math.max(500, Number(e.target.value) || 1800);
+                          if (vehicle.enabled && vehicle.autoSyncPalletHeight) {
+                            onChange((prev) => ({
+                              ...prev,
+                              pallet: {
+                                ...(prev.pallet || DEFAULT_PALLET_CONFIG),
+                                maxStackHeightMm: val,
+                                vehicle: {
+                                  ...vehicle,
+                                  autoSyncPalletHeight: false,
+                                },
+                              },
+                            }));
+                          } else {
+                            updatePallet({ maxStackHeightMm: val });
+                          }
+                        }}
                       />
                     </div>
                     <div>
@@ -2487,45 +2896,45 @@ export default function PalletizerWorkspace({
                 </div>
               </TactileSection>
 
-              <TactileSection title="Audit Stabilitas, Rem & Anti-Pecah">
-                <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-3 space-y-2.5 text-[11px]">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--ink-12)]">
-                        <Sparkles size={13} className="text-[var(--accent-10)] shrink-0" />
-                        <span className="truncate">{activeEvaluation.stability.forkliftSafetyLabel}</span>
-                      </div>
-                      <div className="text-[var(--ink-10)] mt-0.5 truncate">
-                        {activeEvaluation.patternSummary || activeEvaluation.label} · μ={activeEvaluation.stability.surfaceFrictionCoeff}
-                      </div>
+              <TactileSection title="Ringkasan Stabilitas & Material">
+                <div className="rounded-[var(--radius-control)] border-[0.5px] border-[var(--line)] bg-[var(--surface-top)] p-2.5 space-y-2 text-[11px]">
+                  {/* Header Ringkas */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Sparkles size={12} className="text-[var(--accent-10)] shrink-0" />
+                      <span className="text-[12px] font-semibold text-[var(--ink-12)] truncate">
+                        {activeEvaluation.stability.forkliftSafetyLabel}
+                      </span>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono tabular-nums text-[14px] font-bold text-[var(--ink-12)]">
-                        {activeEvaluation.stability.smartScore}
-                        <span className="text-[10px] font-normal text-[var(--ink-10)]">/100</span>
-                      </div>
-                      <div className="text-[10px] text-[var(--ink-10)]">Skor Cerdas</div>
-                    </div>
+                    <span className="font-mono tabular-nums text-[12px] font-bold text-[var(--ink-12)] shrink-0">
+                      {activeEvaluation.stability.smartScore}
+                      <span className="text-[10px] font-normal text-[var(--ink-10)]">/100</span>
+                    </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 pt-2 border-t-[0.5px] border-[var(--line)]">
+                  {/* 3 Metrik Inti */}
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)]">
                     <div>
-                      <span className="text-[var(--ink-10)] block">Seam Lock &amp; Belah</span>
-                      <span className="font-mono tabular-nums font-semibold text-[var(--ink-12)]">
-                        {activeEvaluation.stability.seamLockPct}% ·{' '}
-                        <span
-                          className={
-                            activeEvaluation.stability.faultLineCount > 0
-                              ? 'text-[var(--red-11)]'
-                              : 'text-[var(--green-11)]'
-                          }
-                        >
-                          {activeEvaluation.stability.faultLineCount} Belah
-                        </span>
+                      <span className="text-[10px] text-[var(--ink-10)] block">Beban Bawah</span>
+                      <span
+                        className={`font-mono tabular-nums font-semibold ${
+                          activeEvaluation.bctStatus === 'overload'
+                            ? 'text-[var(--red-11)]'
+                            : activeEvaluation.bctStatus === 'marginal'
+                            ? 'text-[var(--amber-11)]'
+                            : 'text-[var(--green-11)]'
+                        }`}
+                      >
+                        {activeEvaluation.bottomLayerLoadKgf}/
+                        {Math.round(
+                          activeEvaluation.effectivePalletBctKgf /
+                            Math.max(1, config.engineering.safetyFactor)
+                        )}
+                        kg
                       </span>
                     </div>
                     <div>
-                      <span className="text-[var(--ink-10)] block">Sudut Menumpu</span>
+                      <span className="text-[10px] text-[var(--ink-10)] block">Sudut Tumpu</span>
                       <span
                         className={`font-mono tabular-nums font-semibold ${
                           activeEvaluation.stability.supportedCornerPct < 88
@@ -2533,82 +2942,110 @@ export default function PalletizerWorkspace({
                             : 'text-[var(--green-11)]'
                         }`}
                       >
-                        {activeEvaluation.stability.supportedCornerPct}%{' '}
-                        {activeEvaluation.stability.unsupportedCornerCount > 0
-                          ? `(${activeEvaluation.stability.unsupportedCornerCount} gantung)`
-                          : '(Utuh)'}
+                        {activeEvaluation.stability.supportedCornerPct}%
                       </span>
                     </div>
                     <div>
-                      <span className="text-[var(--ink-10)] block">Rem Tanpa Plakban</span>
+                      <span className="text-[10px] text-[var(--ink-10)] block">Rem / Wrap</span>
                       <span
                         className={`font-mono tabular-nums font-semibold ${
                           activeEvaluation.stability.noPlakbanPass035g
                             ? 'text-[var(--green-11)]'
-                            : 'text-[var(--red-11)]'
+                            : 'text-[var(--amber-11)]'
                         }`}
                       >
-                        ±{activeEvaluation.stability.noPlakbanSafeG}g{' '}
-                        {activeEvaluation.stability.noPlakbanPass045g
-                          ? '(0.45g Kuat)'
-                          : activeEvaluation.stability.noPlakbanPass035g
-                          ? '(0.35g Lolos)'
-                          : '(<0.35g)'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[var(--ink-10)] block">Anti-Pecah (Burst)</span>
-                      <span
-                        className={`font-mono tabular-nums font-semibold ${
-                          activeEvaluation.stability.burstStatus === 'strong'
-                            ? 'text-[var(--green-11)]'
-                            : activeEvaluation.stability.burstStatus === 'marginal'
-                            ? 'text-[var(--amber-11)]'
-                            : 'text-[var(--red-11)]'
-                        }`}
-                      >
-                        {activeEvaluation.stability.burstStrengthKpa} kPa (×{activeEvaluation.stability.burstMarginRatio})
+                        ±{activeEvaluation.stability.noPlakbanSafeG}g
                       </span>
                     </div>
                   </div>
 
-                  <div className="space-y-1 pt-1.5 border-t-[0.5px] border-[var(--line)] text-[var(--ink-11)] leading-[15px]">
-                    {activeEvaluation.stability.recommendations.slice(0, 2).map((rec, i) => (
-                      <div key={i} className="flex items-start gap-1.5">
-                        <AlertTriangle
-                          size={12}
-                          className={`mt-0.5 shrink-0 ${
-                            activeEvaluation.stability.faultLineCount > 0 ||
-                            !activeEvaluation.stability.noPlakbanPass035g ||
-                            activeEvaluation.stability.burstStatus !== 'strong'
-                              ? 'text-[var(--amber-11)]'
-                              : 'text-[var(--green-11)]'
-                          }`}
-                        />
-                        <span>{rec}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {/* 1 Catatan Inti bila perlu perhatian */}
+                  {(!activeEvaluation.stability.noPlakbanPass035g ||
+                    activeEvaluation.stability.unsupportedCornerCount > 0 ||
+                    activeEvaluation.bctStatus !== 'safe') && (
+                    <div className="flex items-start gap-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)] text-[10.5px] text-[var(--ink-11)] leading-[14.5px]">
+                      <AlertTriangle size={11} className="mt-0.5 shrink-0 text-[var(--amber-11)]" />
+                      <span>
+                        {activeEvaluation.bctStatus === 'overload'
+                          ? `Beban lapisan bawah (${activeEvaluation.bottomLayerLoadKgf} kg) melewati batas aman SF ${config.engineering.safetyFactor}:1 — pilih kandidat material di bawah.`
+                          : !activeEvaluation.stability.noPlakbanPass035g
+                          ? `Rem forklift ±${activeEvaluation.stability.noPlakbanSafeG}g (<0.35g) — gunakan stretch wrap atau plakban atas.`
+                          : `${activeEvaluation.stability.unsupportedCornerCount} sudut gantung — aktifkan Heat-Map untuk cek titik tekan.`}
+                      </span>
+                    </div>
+                  )}
 
-                  {tuningReport.boardAdvice && (
-                    <div className="rounded-[var(--radius-sm)] bg-[var(--amber-3)] border-[0.5px] border-[var(--amber-6)] p-2 space-y-1.5 text-[11px]">
-                      <div className="font-medium text-[var(--amber-11)]">
-                        Saran Material Anti-Pecah: {tuningReport.boardAdvice.recommendedRecipe}
-                      </div>
-                      <div className="text-[var(--ink-11)] leading-[14px]">
-                        {tuningReport.boardAdvice.reason}
-                      </div>
-                      <TactileButton
-                        type="button"
-                        variant="secondary"
-                        size="compact"
-                        className="w-full justify-center h-auto min-h-[28px] py-1.5"
-                        onClick={handleApplyBoardAdvice}
-                      >
-                        <span className="whitespace-normal text-center leading-[14px]">
-                          Pakai {tuningReport.boardAdvice.recommendedRecipe} · {tuningReport.boardAdvice.burstKpa} kPa (+{tuningReport.boardAdvice.bctGainPct}%)
+                  {/* Rekomendasi Material Bertahap Anti-Overspec (2-3 Kandidat) */}
+                  {tuningReport.boardAdvice && tuningReport.boardAdvice.candidates.length > 0 && (
+                    <div className="pt-2 border-t-[0.5px] border-[var(--line)] space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10.5px] font-semibold text-[var(--ink-12)]">
+                          Saran Material (Anti-Overspec)
                         </span>
-                      </TactileButton>
+                        <span className="text-[10px] font-mono tabular-nums text-[var(--ink-10)]">
+                          {effectiveNetWeightKg.toFixed(1)} kg nett · RH {config.engineering.relativeHumidity}%
+                        </span>
+                      </div>
+                      <p className="text-[10.5px] leading-[14px] text-[var(--ink-10)]">
+                        {tuningReport.boardAdvice.reason}
+                      </p>
+                      <div className="space-y-1.5">
+                        {tuningReport.boardAdvice.candidates.map((cand) => (
+                          <div
+                            key={cand.recipe}
+                            className={`rounded-[var(--radius-sm)] border-[0.5px] px-2 py-1.5 flex items-center justify-between gap-2 ${
+                              cand.isCurrentSpec
+                                ? 'bg-[var(--green-3)]/55 border-[var(--green-6)]'
+                                : cand.tier === 'closest'
+                                ? 'bg-[var(--accent-3)]/45 border-[var(--accent-6)]'
+                                : 'bg-[var(--ink-2)] border-[var(--line)]'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className={`text-[9.5px] font-semibold uppercase tracking-[0.04em] px-1.5 py-0.2 rounded-[3px] ${
+                                    cand.tier === 'closest'
+                                      ? 'bg-[var(--accent-9)] text-white'
+                                      : cand.tier === 'balanced'
+                                      ? 'bg-[var(--ink-4)] text-[var(--ink-12)]'
+                                      : 'bg-[var(--ink-3)] text-[var(--ink-11)]'
+                                  }`}
+                                >
+                                  {cand.tierLabel}
+                                </span>
+                                <span className="text-[11px] font-mono font-semibold text-[var(--ink-12)] truncate">
+                                  {cand.recipe}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 text-[10px] font-mono tabular-nums text-[var(--ink-10)]">
+                                Max {cand.maxSafeStackLoadKgf} kgf · SF {cand.achievedSafetyFactor}× · {cand.boardGsm} gsm
+                                {cand.gsmDeltaPct <= -5 && (
+                                  <span className="text-[var(--green-11)]">
+                                    {' '}
+                                    ({cand.gsmDeltaPct}% hemat)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {cand.isCurrentSpec ? (
+                              <span className="text-[10px] font-medium text-[var(--green-11)] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-[var(--green-3)] shrink-0">
+                                Aktif
+                              </span>
+                            ) : (
+                              <TactileButton
+                                type="button"
+                                variant={cand.tier === 'closest' ? 'primary' : 'secondary'}
+                                size="inline"
+                                className="h-[24px] px-2 text-[10.5px] shrink-0"
+                                onClick={() => handleApplyBoardCandidate(cand)}
+                              >
+                                Pakai
+                              </TactileButton>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -2616,7 +3053,7 @@ export default function PalletizerWorkspace({
                     (smartAdvisor.suggestTopPlakban && !pallet.useTopLayerPlakban)) && (
                     <TactileButton
                       type="button"
-                      variant="primary"
+                      variant="secondary"
                       size="compact"
                       className="w-full justify-center"
                       onClick={() =>
@@ -2630,8 +3067,8 @@ export default function PalletizerWorkspace({
                     >
                       <Sparkles size={12} />
                       <span>
-                        Terapkan Pola Terbaik ({smartAdvisor.bestEvaluation.stability.smartScore}
-                        {smartAdvisor.suggestTopPlakban ? ' + Plakban Atas' : ''})
+                        Pola Terbaik ({smartAdvisor.bestEvaluation.stability.smartScore}
+                        {smartAdvisor.suggestTopPlakban ? ' + Plakban' : ''})
                       </span>
                     </TactileButton>
                   )}
@@ -2757,29 +3194,13 @@ export default function PalletizerWorkspace({
                 })()}
               </TactileSection>
 
-              <TactileSection title="Pola Susunan (Alternating Otomatis)">
-                <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--ink-10)] -mt-1 mb-1">
-                  <div className="flex items-center gap-1 bg-[var(--ink-2)] p-0.5 rounded-[var(--radius-control)]">
-                    {(
-                      [
-                        { id: 'smart', label: 'Skor Cerdas' },
-                        { id: 'max-density', label: 'Muatan Maks' },
-                      ] as const
-                    ).map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => updatePallet({ recommendationMode: m.id, patternAutoMode: true })}
-                        className={`px-2 py-0.5 rounded-[var(--radius-sm)] text-[10.5px] cursor-pointer transition-colors ${
-                          recommendationMode === m.id
-                            ? 'bg-[var(--surface-top)] text-[var(--ink-12)] shadow-[var(--shadow-button)] font-medium'
-                            : 'text-[var(--ink-10)] hover:text-[var(--ink-12)]'
-                        }`}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
+              <TactileSection title="Pola Susunan">
+                <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--ink-10)] -mt-1 mb-1.5">
+                  <span className="truncate">
+                    {isAutoPattern
+                      ? `Auto (${recommendationMode === 'smart' ? 'Skor Cerdas' : 'Muatan Maks'})`
+                      : 'Pilihan Manual'}
+                  </span>
                   {!isAutoPattern && (
                     <button
                       type="button"
@@ -2789,15 +3210,25 @@ export default function PalletizerWorkspace({
                           patternType: optimalPatternType,
                         })
                       }
-                      className="text-[var(--accent-10)] hover:underline cursor-pointer shrink-0"
+                      className="text-[var(--accent-10)] hover:underline cursor-pointer shrink-0 font-medium"
                     >
-                      Auto
+                      Kembali Auto
                     </button>
                   )}
                 </div>
-                <div className="space-y-1.5">
+
+                {/* Compact 2x2 Pattern Grid */}
+                <div className="grid grid-cols-2 gap-1.5">
                   {patternEvaluations.map((ev) => {
                     const active = ev.patternType === effectivePatternType;
+                    const shortLabel =
+                      ev.patternType === 'column'
+                        ? 'Column'
+                        : ev.patternType === 'interlock'
+                        ? 'Interlock'
+                        : ev.patternType === 'pinwheel'
+                        ? 'Pinwheel'
+                        : 'Split-Block';
                     return (
                       <button
                         key={ev.patternType}
@@ -2808,92 +3239,133 @@ export default function PalletizerWorkspace({
                             patternAutoMode: false,
                           })
                         }
-                        className={`w-full text-left px-2.5 py-2 rounded-[var(--radius-control)] border-[0.5px] transition-colors cursor-pointer ${
+                        title={`${ev.label} · ${ev.casesPerLayer}/lyr · Lock ${ev.stability.seamLockPct}% · Sudut ${ev.stability.supportedCornerPct}%`}
+                        className={`text-left px-2.5 py-2 rounded-[var(--radius-control)] border-[0.5px] transition-colors cursor-pointer ${
                           active
                             ? 'bg-[var(--ink-12)] text-white border-[var(--ink-12)]'
                             : 'bg-[var(--surface-top)] text-[var(--ink-12)] border-[var(--line)] hover:bg-[var(--ink-2)]'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-2 text-[12px] font-medium">
-                          <span className="truncate">
-                            {ev.label}
-                            {ev.isSmartRecommended ? ' ★' : ''}
+                        <div className="flex items-center justify-between gap-1 text-[11.5px] font-semibold">
+                          <span className="truncate">{shortLabel}</span>
+                          {ev.isSmartRecommended && (
+                            <span
+                              className={`text-[10px] shrink-0 ${
+                                active ? 'text-amber-300' : 'text-[var(--accent-10)]'
+                              }`}
+                              title="Rekomendasi Optimal"
+                            >
+                              ★
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 flex items-baseline justify-between gap-1 font-mono tabular-nums">
+                          <span className="text-[13px] font-bold leading-none">
+                            {ev.totalCases}
+                            <span
+                              className={`text-[10px] font-normal ml-0.5 ${
+                                active ? 'text-white/75' : 'text-[var(--ink-10)]'
+                              }`}
+                            >
+                              dus
+                            </span>
                           </span>
                           <span
-                            className={`font-mono tabular-nums text-[11px] shrink-0 ${
-                              active ? 'text-white/90' : 'text-[var(--ink-10)]'
+                            className={`text-[10px] ${
+                              active ? 'text-white/80' : 'text-[var(--ink-10)]'
                             }`}
                           >
-                            Skor {ev.stability.smartScore} · {ev.areaEfficiencyPct}%
+                            {ev.casesPerLayer}/lyr
                           </span>
                         </div>
                         <div
-                          className={`mt-0.5 flex items-center justify-between text-[11px] font-mono tabular-nums ${
+                          className={`mt-1 text-[10px] font-mono tabular-nums truncate ${
                             active ? 'text-white/75' : 'text-[var(--ink-10)]'
                           }`}
                         >
-                          <span className="truncate">
-                            {ev.casesPerLayer}/lyr · {ev.totalCases} dus
-                          </span>
-                          <span className="shrink-0">
-                            Lock {ev.stability.seamLockPct}% · Sudut {ev.stability.supportedCornerPct}%
-                          </span>
+                          Skor {ev.stability.smartScore} · {ev.areaEfficiencyPct}%
                         </div>
                       </button>
                     );
                   })}
                 </div>
 
-                {smartAdvisor.variants.length > 0 && (
-                  <div className="pt-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllCandidates((v) => !v)}
-                      className="text-[11px] text-[var(--accent-10)] hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      {showAllCandidates ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                      <span>
-                        {showAllCandidates
-                          ? 'Tutup Perbandingan TOPS'
-                          : `Bandingkan Detail ${smartAdvisor.variants.length} Pola TOPS`}
-                      </span>
-                    </button>
-                    {showAllCandidates && (
-                      <div className="mt-1.5 space-y-1">
-                        {smartAdvisor.variants.map((v) => {
-                          const isCurrent = v.basePattern === effectivePatternType;
-                          return (
-                            <button
-                              key={v.key}
-                              type="button"
-                              onClick={() =>
-                                updatePallet({
-                                  patternType: v.basePattern,
-                                  patternAutoMode: false,
-                                })
-                              }
-                              className={`w-full text-left px-2 py-1.5 rounded-[var(--radius-sm)] border-[0.5px] text-[11px] cursor-pointer ${
-                                isCurrent
-                                  ? 'bg-[var(--ink-3)] border-[var(--ink-8)] text-[var(--ink-12)]'
-                                  : 'bg-[var(--surface-top)] border-[var(--line)] text-[var(--ink-11)] hover:bg-[var(--ink-2)]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2 font-medium">
-                                <span className="truncate">{v.title}</span>
-                                <span className="font-mono tabular-nums shrink-0">
-                                  Skor {v.smartScore} · ±{v.noPlakbanSafeG}g
-                                </span>
-                              </div>
-                              <div className="text-[10.5px] text-[var(--ink-10)] font-mono tabular-nums truncate">
-                                Lock {v.seamLockPct}% · Sudut {v.supportedCornerPct}% · Belah {v.faultLineCount}
-                              </div>
-                            </button>
-                          );
-                        })}
+                {/* Collapsible Optimization Mode & TOPS Detailed Comparison */}
+                <div className="pt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllCandidates((v) => !v)}
+                    className="text-[11px] text-[var(--ink-10)] hover:text-[var(--ink-12)] flex items-center gap-1 cursor-pointer"
+                  >
+                    {showAllCandidates ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    <span>
+                      {showAllCandidates
+                        ? 'Tutup Opsi Lanjutan'
+                        : `Mode Optimasi & Detail TOPS (${smartAdvisor.variants.length})`}
+                    </span>
+                  </button>
+                  {showAllCandidates && (
+                    <div className="mt-2 space-y-2 pt-2 border-t-[0.5px] border-[var(--line)]">
+                      <div className="flex items-center gap-1 bg-[var(--ink-2)] p-0.5 rounded-[var(--radius-control)]">
+                        {(
+                          [
+                            { id: 'smart', label: 'Skor Cerdas' },
+                            { id: 'max-density', label: 'Muatan Maks' },
+                          ] as const
+                        ).map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() =>
+                              updatePallet({ recommendationMode: m.id, patternAutoMode: true })
+                            }
+                            className={`flex-1 px-2 py-1 rounded-[var(--radius-sm)] text-[10.5px] cursor-pointer transition-colors ${
+                              recommendationMode === m.id
+                                ? 'bg-[var(--surface-top)] text-[var(--ink-12)] shadow-[var(--shadow-button)] font-medium'
+                                : 'text-[var(--ink-10)] hover:text-[var(--ink-12)]'
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
                       </div>
-                    )}
-                  </div>
-                )}
+                      {smartAdvisor.variants.length > 0 && (
+                        <div className="space-y-1">
+                          {smartAdvisor.variants.map((v) => {
+                            const isCurrent = v.basePattern === effectivePatternType;
+                            return (
+                              <button
+                                key={v.key}
+                                type="button"
+                                onClick={() =>
+                                  updatePallet({
+                                    patternType: v.basePattern,
+                                    patternAutoMode: false,
+                                  })
+                                }
+                                className={`w-full text-left px-2 py-1.5 rounded-[var(--radius-sm)] border-[0.5px] text-[11px] cursor-pointer ${
+                                  isCurrent
+                                    ? 'bg-[var(--ink-3)] border-[var(--ink-8)] text-[var(--ink-12)]'
+                                    : 'bg-[var(--surface-top)] border-[var(--line)] text-[var(--ink-11)] hover:bg-[var(--ink-2)]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2 font-medium">
+                                  <span className="truncate">{v.title}</span>
+                                  <span className="font-mono tabular-nums shrink-0">
+                                    Skor {v.smartScore} · ±{v.noPlakbanSafeG}g
+                                  </span>
+                                </div>
+                                <div className="text-[10.5px] text-[var(--ink-10)] font-mono tabular-nums truncate">
+                                  Lock {v.seamLockPct}% · Sudut {v.supportedCornerPct}% · Belah {v.faultLineCount}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </TactileSection>
 
               <TactileSection title="Aksesori Stabilitas Palet">
@@ -3049,19 +3521,6 @@ export default function PalletizerWorkspace({
                       </TactileButton>
                     </div>
                   )}
-                  <div className="pt-1">
-                    <TactileButton
-                      type="button"
-                      variant="primary"
-                      size="default"
-                      className="w-full justify-center"
-                      onClick={handleOpenPdfModal}
-                      disabled={contextLost || exportingPdf}
-                    >
-                      <FileDown size={14} />
-                      <span>Export Laporan PDF Palletizer</span>
-                    </TactileButton>
-                  </div>
                 </div>
               </TactileSection>
             </>
@@ -3072,20 +3531,21 @@ export default function PalletizerWorkspace({
 
   return (
     <div className="flex-1 flex min-h-0 overflow-hidden bg-[var(--ground)] relative">
-      {/* Left Configuration Rail: Docked on >= 1024px, Slide-Over Drawer on < 1024px */}
-      {railOpen &&
-        (isOverlayRail ? (
-          <div className="fixed inset-0 z-40 flex">
-            <div
-              onClick={onCloseRail}
-              className="fixed inset-0 bg-[var(--backdrop)] backdrop-blur-[2px]"
-              aria-hidden="true"
-            />
-            {renderLeftRail()}
-          </div>
-        ) : (
-          renderLeftRail()
-        ))}
+      {/* Left Configuration Rail: Docked on >= 1024px, Genie Centered on Mobile, Side Overlay on Tablet */}
+      {isOverlayRail ? (
+        <MobileGenieSheet
+          open={railOpen}
+          isMobileGenie={hasMobileFloatingDock}
+          side="left"
+          dockOrigin="left"
+          ariaLabel="Panel Konfigurasi Palletizer"
+          onClose={onCloseRail ?? (() => {})}
+        >
+          {({ isCenteredMobile }) => renderLeftRail(isCenteredMobile)}
+        </MobileGenieSheet>
+      ) : (
+        railOpen && renderLeftRail(false)
+      )}
 
       {/* Main 3D Palletizer Viewport */}
       <div className="@container relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#f1f3f6]">
@@ -3105,53 +3565,82 @@ export default function PalletizerWorkspace({
           </div>
         )}
 
+        {/* 2D Vehicle & Container Loading Blueprint Overlay (keeps WebGL mounted underneath) */}
+        {vehicle.enabled &&
+          vehicleEvaluation &&
+          floorEvaluation &&
+          palletVsFloorComparison &&
+          canvasViewMode === 'vehicle-2d' && (
+            <div className="absolute inset-0 z-20 bg-[var(--ground)]">
+              <VehicleLoadingBlueprint
+                vehicle={vehicle}
+                pallet={pallet}
+                evaluation={activeEvaluation}
+                vehicleEval={vehicleEvaluation}
+                floorEval={floorEvaluation}
+                comparison={palletVsFloorComparison}
+                onChangeLoadingMode={(loadingMode) => updateVehicle({ loadingMode })}
+                onSwitchTo3D={() => setCanvasViewMode('3d')}
+              />
+            </div>
+          )}
+
         {/* Top-Right Floating Camera POV Presets Capsule */}
-        <div
-          role="group"
-          aria-label="Preset sudut kamera Palletizer"
-          className="pointer-events-auto absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-10 flex items-center gap-1 p-1 rounded-[var(--radius-container)] bg-[var(--surface-top)]/92 backdrop-blur-md border-[0.5px] border-[var(--line)] shadow-[var(--shadow-card)] max-w-[calc(100vw-20px)] overflow-x-auto"
-        >
-          {(['iso', 'front', 'top', 'side'] as CameraPreset[]).map((p) => (
+        {canvasViewMode === '3d' && (
+          <div
+            role="group"
+            aria-label="Preset sudut kamera Palletizer"
+            className="pointer-events-auto absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-10 flex items-center gap-1 p-1 rounded-[var(--radius-container)] bg-[var(--surface-top)]/92 backdrop-blur-md border-[0.5px] border-[var(--line)] shadow-[var(--shadow-card)] max-w-[calc(100vw-20px)] overflow-x-auto"
+          >
+            {vehicle.enabled && vehicleEvaluation && floorEvaluation && (
+              <>
+                <TactileButton
+                  type="button"
+                  variant="secondary"
+                  size="inline"
+                  className="h-[26px] px-2 text-[11px] shrink-0"
+                  onClick={() => setCanvasViewMode('vehicle-2d')}
+                  title={`Buka Denah 2D ${vehicle.name}`}
+                >
+                  <Truck size={12} />
+                  <span>
+                    {vehicleLoadingMode === 'floor-loading'
+                      ? `Floor (${floorEvaluation.totalCases} dus)`
+                      : `Denah Armada (${vehicleEvaluation.totalPallets})`}
+                  </span>
+                </TactileButton>
+                <div className="h-3.5 w-[0.5px] bg-[var(--line)] mx-0.5 shrink-0" />
+              </>
+            )}
+            {(['iso', 'front', 'top', 'side'] as CameraPreset[]).map((p) => (
+              <TactileButton
+                key={p}
+                type="button"
+                variant={activeCamPreset === p ? 'primary' : 'secondary'}
+                size="inline"
+                className="h-[26px] px-2 capitalize text-[11px]"
+                onClick={() => setCameraPreset(p)}
+              >
+                {p}
+              </TactileButton>
+            ))}
+            <div className="h-3.5 w-[0.5px] bg-[var(--line)] mx-0.5 shrink-0" />
             <TactileButton
-              key={p}
               type="button"
-              variant={activeCamPreset === p ? 'primary' : 'secondary'}
+              variant="ghost"
               size="inline"
-              className="h-[26px] px-2 capitalize text-[11px]"
-              onClick={() => setCameraPreset(p)}
+              className="h-[26px] w-[26px] px-0 justify-center shrink-0"
+              onClick={() => {
+                setInspectLayer(null);
+                setCameraPreset('iso');
+              }}
+              title="Reset view"
+              aria-label="Reset view"
             >
-              {p}
+              <RotateCcw size={12} />
             </TactileButton>
-          ))}
-          <div className="h-3.5 w-[0.5px] bg-[var(--line)] mx-0.5 shrink-0" />
-          <TactileButton
-            type="button"
-            variant="ghost"
-            size="inline"
-            className="h-[26px] w-[26px] px-0 justify-center shrink-0"
-            onClick={() => {
-              setInspectLayer(null);
-              setCameraPreset('iso');
-            }}
-            title="Reset view"
-            aria-label="Reset view"
-          >
-            <RotateCcw size={12} />
-          </TactileButton>
-          <div className="h-3.5 w-[0.5px] bg-[var(--line)] mx-0.5 shrink-0" />
-          <TactileButton
-            type="button"
-            variant="primary"
-            size="inline"
-            className="h-[26px] px-2 text-[11px] shrink-0"
-            onClick={handleOpenPdfModal}
-            disabled={contextLost || exportingPdf}
-            title="Export Laporan Engineering Palletizer PDF (A4 2 Halaman)"
-          >
-            <FileDown size={12} />
-            <span>Export PDF</span>
-          </TactileButton>
-        </div>
+          </div>
+        )}
 
         {/* Unified Bottom HUD Bar: Ultra-Thin Bar in Short Landscape, Standard Collapsible Bar Elsewhere */}
         {!((hasMobileFloatingDock || isShortLandscape) && focusMode) && (
@@ -3208,21 +3697,10 @@ export default function PalletizerWorkspace({
                       onClick={() =>
                         setViewOverlayMode((m) => (m === 'normal' ? 'lock-heatmap' : 'normal'))
                       }
-                      title="Mode Heat-Map Penguncian Antar Layer"
+                      title="Mode Heat-Map Beban Berat & Penguncian Antar Layer"
                     >
                       <Flame size={12} />
                       <span className="hidden sm:inline">Heat-Map</span>
-                    </TactileButton>
-
-                    <TactileButton
-                      type="button"
-                      variant={xRayMode ? 'primary' : 'secondary'}
-                      size="inline"
-                      className="h-[26px] px-2"
-                      onClick={() => setXRayMode((x) => !x)}
-                    >
-                      {xRayMode ? <EyeOff size={12} /> : <Eye size={12} />}
-                      <span>X-Ray</span>
                     </TactileButton>
 
                     <button
@@ -3242,119 +3720,122 @@ export default function PalletizerWorkspace({
             <div
               className={`pointer-events-none absolute ${
                 hasMobileFloatingDock ? 'bottom-[68px] md:bottom-3' : 'bottom-3'
-              } inset-x-3 z-10 flex flex-col items-end gap-1`}
+              } inset-x-3 z-10 flex flex-col gap-1.5`}
             >
-              <button
-                type="button"
-                onClick={() => setDockCollapsed((c) => !c)}
-                className="pointer-events-auto inline-flex items-center gap-1.5 h-[26px] px-2.5 rounded-[var(--radius-control)] bg-[#ffffff]/96 border-[0.5px] border-[var(--line)] shadow-[var(--shadow-button)] text-[11px] text-[var(--ink-11)] hover:text-[var(--ink-12)] transition-colors cursor-pointer"
-                title="Toggle kontrol palet (Tombol H)"
-              >
-                {dockCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                <span>{dockCollapsed ? 'Tampilkan Kontrol (H)' : 'Sembunyikan (H)'}</span>
-              </button>
+              {/* Unclipped Status Tag Strip OUTSIDE directly above the HUD Card */}
+              <div className="flex flex-wrap items-center justify-between gap-1.5 w-full">
+                <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 min-w-0">
+                  {activeEvaluation.edgeStatus === 'overhang' ? (
+                    <span className="rounded-[var(--radius-sm)] bg-[var(--red-3)]/95 border-[0.5px] border-[var(--red-6)] shadow-[var(--shadow-button)] px-2 py-0.5 text-[11px] text-[var(--red-11)] font-mono tabular-nums whitespace-nowrap">
+                      Overhang +{Math.max(activeEvaluation.overhangL, activeEvaluation.overhangW)} mm
+                    </span>
+                  ) : activeEvaluation.edgeStatus === 'flush-risk' ? (
+                    <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)]/95 border-[0.5px] border-[var(--amber-6)] shadow-[var(--shadow-button)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
+                      Tepi Mepet -{Math.min(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                    </span>
+                  ) : activeEvaluation.edgeStatus === 'excessive-underhang' ? (
+                    <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)]/95 border-[0.5px] border-[var(--amber-6)] shadow-[var(--shadow-button)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
+                      Underhang -{Math.max(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                    </span>
+                  ) : (
+                    <span className="rounded-[var(--radius-sm)] bg-[var(--green-3)]/95 border-[0.5px] border-[var(--green-6)] shadow-[var(--shadow-button)] px-2 py-0.5 text-[11px] text-[var(--green-11)] font-mono tabular-nums whitespace-nowrap">
+                      Inset -{activeEvaluation.underhangL}/-{activeEvaluation.underhangW} mm
+                    </span>
+                  )}
+
+                  {activeEvaluation.maxInternalGapMm >= 5 && (
+                    <span
+                      title={
+                        activeEvaluation.maxInternalGapMm > 50
+                          ? `Celah tengah ${activeEvaluation.maxInternalGapMm} mm (>50 mm): aktifkan Tier Sheet atau ganti mode Rapat`
+                          : `Perataan Sisi Luar aktif dengan celah tengah aman ${activeEvaluation.maxInternalGapMm} mm`
+                      }
+                      className={`rounded-[var(--radius-sm)] border-[0.5px] shadow-[var(--shadow-button)] px-2 py-0.5 text-[11px] font-mono tabular-nums whitespace-nowrap ${
+                        activeEvaluation.maxInternalGapMm > 50
+                          ? 'bg-[var(--amber-3)]/95 border-[var(--amber-6)] text-[var(--amber-11)]'
+                          : 'bg-[var(--green-3)]/95 border-[var(--green-6)] text-[var(--green-11)]'
+                      }`}
+                    >
+                      Celah {activeEvaluation.maxInternalGapMm} mm
+                    </span>
+                  )}
+
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-sm)] border-[0.5px] shadow-[var(--shadow-button)] text-[11px] font-medium whitespace-nowrap ${bctStatusMeta.badgeClass}`}
+                  >
+                    <BctStatusIcon size={12} />
+                    <span>{bctStatusMeta.label}</span>
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setDockCollapsed((c) => !c)}
+                  className="pointer-events-auto ml-auto inline-flex items-center gap-1.5 h-[26px] px-2.5 rounded-[var(--radius-control)] bg-[#ffffff]/96 border-[0.5px] border-[var(--line)] shadow-[var(--shadow-button)] text-[11px] text-[var(--ink-11)] hover:text-[var(--ink-12)] transition-colors cursor-pointer shrink-0"
+                  title="Toggle kontrol palet (Tombol H)"
+                >
+                  {dockCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  <span>{dockCollapsed ? 'Tampilkan (H)' : 'Lipat (H)'}</span>
+                </button>
+              </div>
 
               <div className="pointer-events-auto w-full rounded-[var(--radius-container)] bg-[#ffffff]/96 border-[0.5px] border-[var(--line)] shadow-[var(--shadow-modal)] px-3 sm:px-3.5 py-2 overflow-hidden">
-                {/* Row 1: Pallet & BCT Summary Band (Always visible even when controls collapse) */}
+                {/* Row 1: Compact Pallet Header & Heat-Map Legend */}
                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                   <div className="flex flex-wrap items-baseline gap-x-2 min-w-0">
                     <span className="text-[12.5px] font-semibold text-[var(--ink-12)] whitespace-nowrap">
                       {activeEvaluation.label}
                     </span>
                     <span aria-hidden="true" className="text-[var(--ink-8)]">·</span>
-                    <span className="text-[11px] text-[var(--ink-10)] whitespace-nowrap">
-                      {pallet.palletLengthMm} × {pallet.palletWidthMm} mm Pallet
+                    <span className="text-[11px] text-[var(--ink-10)] truncate">
+                      {pallet.palletLengthMm} × {pallet.palletWidthMm} mm
                       {activeEvaluation.patternSummary ? ` · ${activeEvaluation.patternSummary}` : ''}
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 shrink-0 ml-auto">
-                    {viewOverlayMode === 'lock-heatmap' && (
-                      <div className="hidden @[640px]:flex items-center gap-2.5 text-[10.5px] text-[var(--ink-11)] pr-1">
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                          <span className="size-2 rounded-[2px] bg-[#22C55E]" />
-                          Terkunci
-                        </span>
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                          <span className="size-2 rounded-[2px] bg-[#F59E0B]" />
-                          Column 1:1
-                        </span>
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                          <span className="size-2 rounded-[2px] bg-[#EF4444]" />
-                          Rawan
-                        </span>
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                          <span className="size-2 rounded-full bg-[#EA580C]" />
-                          Sudut Gantung ({activeEvaluation.stability.unsupportedCornerCount})
-                        </span>
-                      </div>
-                    )}
-
-                    {activeEvaluation.edgeStatus === 'overhang' ? (
-                      <span className="rounded-[var(--radius-sm)] bg-[var(--red-3)] border-[0.5px] border-[var(--red-6)] px-2 py-0.5 text-[11px] text-[var(--red-11)] font-mono tabular-nums whitespace-nowrap">
-                        Overhang +{Math.max(activeEvaluation.overhangL, activeEvaluation.overhangW)} mm
+                  {viewOverlayMode === 'lock-heatmap' && (
+                    <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-[var(--ink-11)]">
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <span className="size-2 rounded-[2px] bg-[#22C55E]" />
+                        Aman
                       </span>
-                    ) : activeEvaluation.edgeStatus === 'flush-risk' ? (
-                      <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)] border-[0.5px] border-[var(--amber-6)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
-                        Tepi Mepet -{Math.min(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <span className="size-2 rounded-[2px] bg-[#F59E0B]" />
+                        Waspada
                       </span>
-                    ) : activeEvaluation.edgeStatus === 'excessive-underhang' ? (
-                      <span className="rounded-[var(--radius-sm)] bg-[var(--amber-3)] border-[0.5px] border-[var(--amber-6)] px-2 py-0.5 text-[11px] text-[var(--amber-11)] font-mono tabular-nums whitespace-nowrap">
-                        Underhang -{Math.max(activeEvaluation.underhangL, activeEvaluation.underhangW)} mm
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <span className="size-2 rounded-[2px] bg-[#EF4444]" />
+                        Beban Kritis
                       </span>
-                    ) : (
-                      <span className="rounded-[var(--radius-sm)] bg-[var(--green-3)] border-[0.5px] border-[var(--green-6)] px-2 py-0.5 text-[11px] text-[var(--green-11)] font-mono tabular-nums whitespace-nowrap">
-                        Inset -{activeEvaluation.underhangL}/-{activeEvaluation.underhangW} mm
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <span className="size-2 rounded-full bg-[#EA580C]" />
+                        Gantung ({activeEvaluation.stability.unsupportedCornerCount})
                       </span>
-                    )}
-
-                    {activeEvaluation.maxInternalGapMm >= 5 && (
-                      <span
-                        title={
-                          activeEvaluation.maxInternalGapMm > 50
-                            ? `Celah tengah ${activeEvaluation.maxInternalGapMm} mm (>50 mm): aktifkan Tier Sheet atau ganti mode Rapat`
-                            : `Perataan Sisi Luar aktif dengan celah tengah aman ${activeEvaluation.maxInternalGapMm} mm`
-                        }
-                        className={`rounded-[var(--radius-sm)] border-[0.5px] px-2 py-0.5 text-[11px] font-mono tabular-nums whitespace-nowrap ${
-                          activeEvaluation.maxInternalGapMm > 50
-                            ? 'bg-[var(--amber-3)] border-[var(--amber-6)] text-[var(--amber-11)]'
-                            : 'bg-[var(--green-3)] border-[var(--green-6)] text-[var(--green-11)]'
-                        }`}
-                      >
-                        Celah {activeEvaluation.maxInternalGapMm} mm
-                      </span>
-                    )}
-
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-sm)] border-[0.5px] text-[11px] font-medium shrink-0 ${bctStatusMeta.badgeClass}`}
-                    >
-                      <BctStatusIcon size={12} />
-                      <span>{bctStatusMeta.label}</span>
-                    </span>
-                  </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 @[620px]:grid-cols-4 gap-x-4 gap-y-1.5 mt-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)] text-[11px]">
+                <div className="grid grid-cols-2 @[620px]:grid-cols-4 gap-x-4 gap-y-1 mt-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)] text-[11px]">
                   <div className="min-w-0">
-                    <span className="text-[var(--ink-10)] block">Muatan &amp; Produk</span>
+                    <span className="text-[var(--ink-10)] block">Muatan &amp; Nett</span>
                     <span className="font-mono tabular-nums font-semibold text-[var(--ink-12)] whitespace-nowrap">
-                      {activeEvaluation.totalCases} dus ({activeEvaluation.totalUnits.toLocaleString('id-ID')} pcs)
+                      {activeEvaluation.totalCases} dus · {effectiveNetWeightKg.toFixed(1)} kg
                     </span>
                   </div>
                   <div className="min-w-0">
-                    <span className="text-[var(--ink-10)] block">Lock &amp; Sudut Menumpu</span>
+                    <span className="text-[var(--ink-10)] block">Lock &amp; Sudut Tumpu</span>
                     <span className="font-mono tabular-nums font-semibold text-[var(--ink-12)] whitespace-nowrap">
                       {activeEvaluation.stability.seamLockPct}% · {activeEvaluation.stability.supportedCornerPct}%
                     </span>
                   </div>
                   <div className="min-w-0">
-                    <span className="text-[var(--ink-10)] block">Rem Tanpa Plakban / Burst</span>
+                    <span className="text-[var(--ink-10)] block">Rem / Burst</span>
                     <span className="font-mono tabular-nums text-[var(--ink-12)] whitespace-nowrap">
                       ±{activeEvaluation.stability.noPlakbanSafeG}g · {activeEvaluation.stability.burstStrengthKpa} kPa
                     </span>
                   </div>
                   <div className="min-w-0">
-                    <span className="text-[var(--ink-10)] block">Tinggi &amp; Berat</span>
+                    <span className="text-[var(--ink-10)] block">Tinggi &amp; Total Berat</span>
                     <span className="font-mono tabular-nums text-[var(--ink-12)] whitespace-nowrap">
                       {activeEvaluation.totalStackHeightMm} mm · {activeEvaluation.grossLoadKg} kg
                     </span>
@@ -3385,7 +3866,7 @@ export default function PalletizerWorkspace({
                       </span>
                     </div>
 
-                    {/* Right Actions: Heat-Map + X-Ray */}
+                    {/* Right Action: Weight & Interlock Heat-Map */}
                     <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                       <TactileButton
                         type="button"
@@ -3394,20 +3875,10 @@ export default function PalletizerWorkspace({
                         onClick={() =>
                           setViewOverlayMode((m) => (m === 'normal' ? 'lock-heatmap' : 'normal'))
                         }
-                        title="Mode Heat-Map Penguncian Antar Layer"
+                        title="Mode Heat-Map Beban Berat & Penguncian Antar Layer"
                       >
                         <Flame size={13} />
                         <span>Heat-Map</span>
-                      </TactileButton>
-
-                      <TactileButton
-                        type="button"
-                        variant={xRayMode ? 'primary' : 'secondary'}
-                        size="compact"
-                        onClick={() => setXRayMode((x) => !x)}
-                      >
-                        {xRayMode ? <EyeOff size={13} /> : <Eye size={13} />}
-                        <span>X-Ray</span>
                       </TactileButton>
                     </div>
                   </div>
@@ -3449,6 +3920,8 @@ export default function PalletizerWorkspace({
                 <p className="text-[11px] text-[var(--ink-10)]">
                   {exportModalTab === 'vector'
                     ? 'Line-art hitam murni transparan (HLR) siap edit di Illustrator & cetak flexo'
+                    : vehicle.enabled
+                    ? 'Format A4 · 3 Halaman (termasuk Rencana Muat Armada & Clearance Forklift)'
                     : 'Format A4 · 2 Halaman siap cetak & serah terima gudang'}
                 </p>
               </div>
@@ -3523,7 +3996,9 @@ export default function PalletizerWorkspace({
 
               {exportModalTab === 'engineering' ? (
                 <div className="rounded-[var(--radius-control)] bg-[var(--ink-2)] border-[0.5px] border-[var(--line)] p-2.5 space-y-1 text-[11px] text-[var(--ink-11)]">
-                  <div className="font-medium text-[var(--ink-12)]">Isi Laporan PDF (2 Halaman A4):</div>
+                  <div className="font-medium text-[var(--ink-12)]">
+                    Isi Laporan PDF ({vehicle.enabled ? '3 Halaman A4' : '2 Halaman A4'}):
+                  </div>
                   <ul className="space-y-0.5 pl-3.5 list-disc">
                     <li>
                       <span className="font-medium text-[var(--ink-12)]">Hal 1:</span> Status Tumpukan, Spec &amp; Material, Tipe Palet &amp; Aksesori, Operating Conditions, Audit BCT, Audit Stabilitas, serta Diagram 2D Layer 1 &amp; Layer 2 (bernomor dus, panah orientasi, celah tengah, dimensi mm).
@@ -3531,6 +4006,11 @@ export default function PalletizerWorkspace({
                     <li>
                       <span className="font-medium text-[var(--ink-12)]">Hal 2:</span> 4 POV Normal (Iso, Top, Front, Side) + Panel Khusus Heat-Map (Iso &amp; Top) beserta legenda penguncian &amp; sudut gantung.
                     </li>
+                    {vehicle.enabled && vehicleEvaluation && (
+                      <li>
+                        <span className="font-medium text-[var(--ink-12)]">Hal 3:</span> Rencana Muat Armada ({vehicle.name} · {vehicleEvaluation.totalPallets} palet, {vehicleEvaluation.activeTiers} tier), Denah 2D Top View &amp; Side View, ambang pintu forklift, serta audit clearance.
+                      </li>
+                    )}
                   </ul>
                 </div>
               ) : (
@@ -3713,7 +4193,13 @@ export default function PalletizerWorkspace({
                     onClick={() => void handleExportPdfReport()}
                   >
                     <FileDown size={14} />
-                    <span>{exportingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF (2 Hal)'}</span>
+                    <span>
+                      {exportingPdf
+                        ? 'Menyiapkan PDF...'
+                        : vehicle.enabled
+                        ? 'Unduh PDF (3 Hal)'
+                        : 'Unduh PDF (2 Hal)'}
+                    </span>
                   </TactileButton>
                 ) : (
                   <>

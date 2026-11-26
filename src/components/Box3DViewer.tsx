@@ -363,7 +363,7 @@ export default function Box3DViewer({
     scene.fog = new THREE.Fog('#F1F5F9', 9, 22);
 
     const camera = new THREE.PerspectiveCamera(40, width / height, 0.05, 50);
-    camera.position.set(2.35, 1.95, 2.65);
+    camera.position.set(3.25, 2.55, 3.65);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: profile.antialias,
@@ -444,20 +444,20 @@ export default function Box3DViewer({
     controls.dampingFactor = 0.08;
     controls.maxPolarAngle = Math.PI / 2 - 0.02;
     controls.minDistance = 1.1;
-    controls.maxDistance = 9;
-    controls.target.set(0, 0.55, 0);
+    controls.maxDistance = 12;
+    controls.target.set(0, 0.52, 0);
     controls.update();
 
     // Pre-allocated camera transition targets
     let camTransitioning = false;
-    const goalCamPos = new THREE.Vector3(2.35, 1.95, 2.65);
-    const goalTarget = new THREE.Vector3(0, 0.55, 0);
+    const goalCamPos = new THREE.Vector3(3.25, 2.55, 3.65);
+    const goalTarget = new THREE.Vector3(0, 0.52, 0);
 
     const CAMERA_PRESETS: Record<CameraViewPreset, { pos: [number, number, number]; target: [number, number, number] }> = {
-      iso: { pos: [2.35, 1.95, 2.65], target: [0, 0.55, 0] },
-      front: { pos: [0, 0.85, 3.05], target: [0, 0.55, 0] },
-      top: { pos: [0.01, 3.25, 0.65], target: [0, 0.4, 0] },
-      side: { pos: [2.95, 0.9, 0.15], target: [0, 0.55, 0] },
+      iso: { pos: [3.25, 2.55, 3.65], target: [0, 0.52, 0] },
+      front: { pos: [0, 0.95, 4.15], target: [0, 0.52, 0] },
+      top: { pos: [0.01, 4.35, 0.75], target: [0, 0.4, 0] },
+      side: { pos: [4.05, 1.0, 0.15], target: [0, 0.52, 0] },
     };
 
     const onControlStart = () => {

@@ -1,6 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Download,
   ZoomIn,
   ZoomOut,
   Maximize2,
@@ -34,6 +33,11 @@ interface BoxPreviewProps {
   onChangeExportMode: (mode: ExportMode) => void;
   hasMobileFloatingDock?: boolean;
   focusMode?: boolean;
+  pdfExportTrigger?: number;
+  onPdfExportTriggered?: () => void;
+  svgExportTrigger?: number;
+  onSvgExportTriggered?: () => void;
+  onExportingPdfChange?: (exporting: boolean) => void;
 }
 
 interface FlattenedBarcode {
@@ -78,6 +82,11 @@ export default function BoxPreview({
   onChangeExportMode,
   hasMobileFloatingDock = false,
   focusMode = false,
+  pdfExportTrigger = 0,
+  onPdfExportTriggered,
+  svgExportTrigger = 0,
+  onSvgExportTriggered,
+  onExportingPdfChange,
 }: BoxPreviewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -325,6 +334,7 @@ export default function BoxPreview({
     const built = buildExportSVG();
     if (!built) return;
     setExportingPdf(true);
+    onExportingPdfChange?.(true);
     try {
       const [{ jsPDF }, { svg2pdf }] = await Promise.all([
         import('jspdf'),
@@ -357,8 +367,41 @@ export default function BoxPreview({
       );
     } finally {
       setExportingPdf(false);
+      onExportingPdfChange?.(false);
     }
   };
+
+  // Trigger 1:1 mm Dieline PDF when requested from the unified Header Export popover
+  const lastHandledPdfTriggerRef = useRef<number>(0);
+  useEffect(() => {
+    if (!pdfExportTrigger) {
+      lastHandledPdfTriggerRef.current = 0;
+      return;
+    }
+    if (pdfExportTrigger === lastHandledPdfTriggerRef.current) return;
+    lastHandledPdfTriggerRef.current = pdfExportTrigger;
+    const raf = window.requestAnimationFrame(() => {
+      void downloadPDF();
+      onPdfExportTriggered?.();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [pdfExportTrigger]);
+
+  // Trigger 1:1 mm Dieline SVG when requested from the unified Header Export popover
+  const lastHandledSvgTriggerRef = useRef<number>(0);
+  useEffect(() => {
+    if (!svgExportTrigger) {
+      lastHandledSvgTriggerRef.current = 0;
+      return;
+    }
+    if (svgExportTrigger === lastHandledSvgTriggerRef.current) return;
+    lastHandledSvgTriggerRef.current = svgExportTrigger;
+    const raf = window.requestAnimationFrame(() => {
+      downloadSVG();
+      onSvgExportTriggered?.();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [svgExportTrigger]);
 
   const paperColor = config.materialColor === 'kraft' ? '#E5D3B3' : '#FFFFFF';
   const hasPerf = paths.perforationSegments.length > 0;
@@ -377,11 +420,11 @@ export default function BoxPreview({
 
   return (
     <div className="flex-1 flex flex-col relative bg-[var(--ground)] overflow-hidden min-h-0">
-      {/* Adaptive Workspace Toolbar */}
-      <div className="surface-panel min-h-[48px] py-1.5 border-b-[0.5px] border-[var(--line)] bg-[var(--surface-top)] flex flex-wrap lg:flex-nowrap items-center justify-between px-3 sm:px-4 shrink-0 gap-2">
-        {/* Left: Zoom & Layer Controls */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          <div className="flex items-center bg-[var(--ink-3)] rounded-[var(--radius-control)] p-[3px] gap-0.5">
+      {/* Single-Row Slim Adaptive 2D Workspace Toolbar (Export PDF & SVG centralized in Header) */}
+      <div className="surface-panel h-[40px] border-b-[0.5px] border-[var(--line)] bg-[var(--surface-top)] flex flex-nowrap items-center justify-between px-2 sm:px-3.5 shrink-0 gap-1.5 sm:gap-2">
+        {/* Left: Compact Zoom, Layers & Conditional Reset */}
+        <div className="flex items-center gap-1 sm:gap-1.5 flex-nowrap shrink-0 min-w-0">
+          <div className="flex items-center bg-[var(--ink-3)] rounded-[var(--radius-control)] p-[2px] gap-0.5 shrink-0">
             <TactileButton
               type="button"
               variant="icon"
@@ -389,9 +432,9 @@ export default function BoxPreview({
               title="Zoom out"
               aria-label="Zoom out"
             >
-              <ZoomOut size={14} />
+              <ZoomOut size={13} />
             </TactileButton>
-            <span className="px-1.5 text-[12px] font-mono tabular-nums text-[var(--ink-12)] min-w-[48px] text-center select-none">
+            <span className="hidden min-[440px]:inline-block px-1 text-[11.5px] font-mono tabular-nums text-[var(--ink-12)] min-w-[42px] text-center select-none">
               {Math.round(zoom * 100)}%
             </span>
             <TactileButton
@@ -401,33 +444,37 @@ export default function BoxPreview({
               title="Zoom in"
               aria-label="Zoom in"
             >
-              <ZoomIn size={14} />
+              <ZoomIn size={13} />
             </TactileButton>
             <TactileButton
               type="button"
               variant="pill"
               onClick={resetView}
               title="Fit to viewport"
+              aria-label="Fit to viewport"
             >
-              <Maximize2 size={13} />
-              Fit
+              <Maximize2 size={12} />
+              <span className="hidden sm:inline">Fit</span>
             </TactileButton>
           </div>
 
           {/* Tactile Layers Dropdown */}
-          <div className="relative" data-layers-menu>
+          <div className="relative shrink-0" data-layers-menu>
             <TactileButton
               type="button"
               variant="secondary"
               size="compact"
+              className="px-2 sm:px-2.5 gap-1"
               aria-expanded={layersOpen}
+              aria-label="Layers"
+              title="Pengaturan lapisan CAD & pre-press"
               onClick={() => setLayersOpen((o) => !o)}
             >
-              <Layers size={14} className="text-[var(--ink-10)]" />
-              <span>Layers</span>
+              <Layers size={13} className="text-[var(--ink-10)] shrink-0" />
+              <span className="hidden sm:inline whitespace-nowrap">Layers</span>
               <ChevronDown
-                size={14}
-                className={`text-[var(--ink-9)] transition-transform duration-[var(--dur-hover)] ease-[var(--ease-out)] ${
+                size={13}
+                className={`text-[var(--ink-9)] shrink-0 transition-transform duration-[var(--dur-hover)] ease-[var(--ease-out)] ${
                   layersOpen ? 'rotate-180' : ''
                 }`}
               />
@@ -435,7 +482,7 @@ export default function BoxPreview({
 
             {layersOpen && (
               <div
-                className="surface-overlay absolute left-0 top-full mt-1.5 w-[240px] bg-[var(--overlay)] rounded-[var(--radius-container)] shadow-[var(--shadow-menu)] p-1.5 z-40 origin-top"
+                className="surface-overlay absolute left-0 top-full mt-1.5 w-[min(240px,calc(100vw-24px))] bg-[var(--overlay)] rounded-[var(--radius-container)] shadow-[var(--shadow-menu)] p-1.5 z-40 origin-top"
                 style={{ animation: 'tactileMenuIn 150ms cubic-bezier(0.23, 1, 0.32, 1)' }}
               >
                 {isCleanCad && (
@@ -505,16 +552,23 @@ export default function BoxPreview({
           </div>
 
           {(pan.x !== 0 || pan.y !== 0 || zoom !== 1) && (
-            <TactileButton type="button" variant="ghost" size="compact" onClick={resetView}>
-              <RotateCcw size={13} />
-              <span className="hidden sm:inline">Reset pan</span>
-              <span className="sm:hidden">Reset</span>
+            <TactileButton
+              type="button"
+              variant="ghost"
+              size="compact"
+              className="px-1.5 sm:px-2 shrink-0"
+              onClick={resetView}
+              title="Reset pan & zoom"
+              aria-label="Reset pan & zoom"
+            >
+              <RotateCcw size={12} />
+              <span className="hidden md:inline">Reset</span>
             </TactileButton>
           )}
         </div>
 
-        {/* Right: Export Mode + Vector/PDF Downloads (single primary CTA on surface) */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 ml-auto">
+        {/* Right: Adaptive View/Export Mode Segmented Toggle */}
+        <div className="flex items-center shrink-0 ml-auto">
           <TactileSegmented
             value={exportMode}
             onChange={onChangeExportMode}
@@ -523,49 +577,38 @@ export default function BoxPreview({
             options={[
               {
                 value: 'spec-sheet',
-                label: 'Spec sheet',
+                label: (
+                  <>
+                    <span className="sm:hidden">Spec</span>
+                    <span className="hidden sm:inline">Spec sheet</span>
+                  </>
+                ),
                 title: 'Gambar teknik lengkap (dimensi, legenda, title block, pre-press) untuk review/QA',
               },
               {
                 value: 'clean-cad',
-                label: 'Clean CAD',
+                label: (
+                  <>
+                    <span className="sm:hidden">CAD</span>
+                    <span className="hidden sm:inline">Clean CAD</span>
+                  </>
+                ),
                 title: 'Pratinjau & ekspor vektor murni 1:1 (Cut, Crease, Perforation, Barcode) untuk mesin potong',
               },
             ]}
           />
-
-          <TactileButton type="button" variant="secondary" size="compact" onClick={downloadSVG}>
-            <span className="hidden sm:inline">Export </span>SVG
-          </TactileButton>
-
-          <TactileButton
-            type="button"
-            variant="primary"
-            size="compact"
-            onClick={downloadPDF}
-            disabled={exportingPdf}
-          >
-            <Download size={14} />
-            {exportingPdf ? (
-              'PDF...'
-            ) : (
-              <>
-                <span className="hidden sm:inline">Export </span>PDF
-              </>
-            )}
-          </TactileButton>
         </div>
       </div>
 
-      {/* Interactive 2D CAD Drawing Area */}
+      {/* Expanded Interactive 2D CAD Drawing Area */}
       <div
         ref={viewportRef}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className={`flex-1 flex items-center justify-center p-3 sm:p-5 ${
-          hasMobileFloatingDock && !focusMode ? 'pb-20 md:pb-5' : ''
+        className={`flex-1 flex items-center justify-center p-2 sm:p-3.5 ${
+          hasMobileFloatingDock && !focusMode ? 'pb-20 md:pb-3.5' : ''
         } overflow-hidden relative select-none touch-none ${
           isPanning ? 'cursor-grabbing' : 'cursor-grab'
         }`}
@@ -580,7 +623,7 @@ export default function BoxPreview({
         }
       >
         <div
-          className="relative rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-4 w-full h-full flex items-center justify-center transition-colors duration-200"
+          className="relative rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-2.5 sm:p-3.5 w-full h-full flex items-center justify-center transition-colors duration-200"
           style={{
             backgroundColor: paperColor,
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,

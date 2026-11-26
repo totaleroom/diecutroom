@@ -19,11 +19,17 @@ import {
   MoreHorizontal,
   SlidersHorizontal,
   Download,
+  FileDown,
+  ChevronDown,
+  FileText,
+  FileCode2,
+  PenTool,
 } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import BoxPreview from './components/BoxPreview';
 import BCTInspectorRail from './components/BCTInspectorRail';
 import AuthGate from './components/AuthGate';
+import MobileGenieSheet from './components/MobileGenieSheet';
 import {
   PWAInstallButton,
   OfflineIndicator,
@@ -70,7 +76,15 @@ export default function App() {
   const [exportMode, setExportMode] = useState<ExportMode>('spec-sheet');
   const [engineeringSheetOpen, setEngineeringSheetOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [dielinePdfTrigger, setDielinePdfTrigger] = useState(0);
+  const [dielineSvgTrigger, setDielineSvgTrigger] = useState(0);
+  const [dielineExportingPdf, setDielineExportingPdf] = useState(false);
+  const [palletExportTabRequest, setPalletExportTabRequest] = useState<
+    'engineering' | 'vector' | null
+  >(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const [headerWidth, setHeaderWidth] = useState<number>(() =>
     typeof window !== 'undefined' ? window.innerWidth : 1280
@@ -114,6 +128,7 @@ export default function App() {
       length: 196,
       width: 146,
       depth: 98,
+      netWeightKg: 1,
       tolerancePreset: 'standard',
       clearanceL: 4,
       clearanceW: 4,
@@ -157,9 +172,9 @@ export default function App() {
       printCoverage: 15,
       panelPrintCoverage: [15, 15, 15, 15],
       printPresetId: 'custom',
-      relativeHumidity: 50,
-      handlingRisk: false,
-      safetyFactor: 5,
+      relativeHumidity: 75,
+      handlingRisk: true,
+      safetyFactor: 4,
       sheetCostPerSqm: 12500,
       currency: 'IDR',
     },
@@ -297,6 +312,25 @@ export default function App() {
     };
   }, [moreMenuOpen]);
 
+  // Close Header Export PDF popover on outside click or Escape
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [exportMenuOpen]);
+
   // Measure actual <header> container width inside <main> so controls never collide when sidebars are open
   useEffect(() => {
     if (authChecking || !authUser) return;
@@ -394,45 +428,73 @@ export default function App() {
     !showProyekInline ||
     !showFullUtilitiesInline;
 
+  const triggerDielinePdfExport = () => {
+    setExportMenuOpen(false);
+    if (viewMode !== '2d') {
+      setViewMode('2d');
+    }
+    setDielinePdfTrigger((n) => n + 1);
+  };
+
+  const triggerDielineSvgExport = () => {
+    setExportMenuOpen(false);
+    if (viewMode !== '2d') {
+      setViewMode('2d');
+    }
+    setDielineSvgTrigger((n) => n + 1);
+  };
+
+  const triggerPalletExportModal = (tab: 'engineering' | 'vector') => {
+    setExportMenuOpen(false);
+    if (viewMode !== 'pallet') {
+      setViewMode('pallet');
+    }
+    setPalletExportTabRequest(tab);
+  };
+
   return (
     <div className="relative flex h-[100dvh] w-full bg-[var(--ground)] text-[var(--ink-12)] overflow-hidden">
       {viewMode !== 'pallet' &&
-        specsOpen &&
         !focusMode &&
         (isLeftOverlay ? (
-          <div
-            className="fixed inset-0 z-40 flex"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Panel Spesifikasi DieCut"
+          <MobileGenieSheet
+            open={specsOpen}
+            isMobileGenie={showMobileBottomDock}
+            side="left"
+            dockOrigin="left"
+            ariaLabel="Panel Spesifikasi DieCut"
+            onClose={() => setSpecsOpen(false)}
           >
-            <div
-              className="absolute inset-0 bg-[var(--backdrop)] backdrop-blur-[2px]"
-              onClick={() => setSpecsOpen(false)}
-              aria-hidden="true"
-            />
+            {({ isCenteredMobile }) => (
+              <Sidebar
+                config={config}
+                paths={paths}
+                analysis={analysis}
+                onChange={setConfig}
+                onOpenEngineering={() => {
+                  setSpecsOpen(false);
+                  setEngineeringSheetOpen(true);
+                }}
+                onClose={() => setSpecsOpen(false)}
+                className={
+                  isCenteredMobile
+                    ? '!w-full !h-full !border-r-0'
+                    : 'relative z-10 shadow-[var(--shadow-modal)]'
+                }
+              />
+            )}
+          </MobileGenieSheet>
+        ) : (
+          specsOpen && (
             <Sidebar
               config={config}
               paths={paths}
               analysis={analysis}
               onChange={setConfig}
-              onOpenEngineering={() => {
-                setSpecsOpen(false);
-                setEngineeringSheetOpen(true);
-              }}
+              onOpenEngineering={() => setEngineeringSheetOpen(true)}
               onClose={() => setSpecsOpen(false)}
-              className="relative z-10 shadow-[var(--shadow-modal)]"
             />
-          </div>
-        ) : (
-          <Sidebar
-            config={config}
-            paths={paths}
-            analysis={analysis}
-            onChange={setConfig}
-            onOpenEngineering={() => setEngineeringSheetOpen(true)}
-            onClose={() => setSpecsOpen(false)}
-          />
+          )
         ))}
 
       <main className="surface-panel flex-1 flex flex-col min-w-0 overflow-hidden bg-[var(--surface-top)]">
@@ -600,6 +662,120 @@ export default function App() {
               </TactileButton>
             )}
 
+            {/* Unified Header Export Popover (Single source of truth for PDF & SVG across all views) */}
+            <div ref={exportMenuRef} className="relative shrink-0">
+              <TactileButton
+                type="button"
+                variant="primary"
+                size="compact"
+                disabled={dielineExportingPdf}
+                className="h-[34px] md:h-[var(--control-h-compact)] px-2.5 gap-1.5 whitespace-nowrap shrink-0"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setExportMenuOpen((v) => !v);
+                }}
+                aria-expanded={exportMenuOpen}
+                aria-haspopup="menu"
+                aria-label="Export PDF & SVG"
+                title="Export PDF & SVG (Dieline CAD, Laporan Pallet, atau Vektor AI)"
+              >
+                <FileDown size={13} />
+                <span>{dielineExportingPdf ? 'PDF...' : 'Export'}</span>
+                <ChevronDown size={12} className="opacity-80" />
+              </TactileButton>
+
+              {exportMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-[calc(100%+6px)] w-[min(276px,calc(100vw-24px))] surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-modal)] border-[0.5px] border-[var(--line)] p-1.5 z-50 flex flex-col gap-0.5"
+                >
+                  <div className="px-2.5 pt-1 pb-1 text-[11px] leading-[14px] text-[var(--ink-10)] flex items-center justify-between gap-2">
+                    <span>Dieline 2D CAD</span>
+                    <span className="font-mono text-[10.5px] text-[var(--ink-11)]">
+                      {exportMode === 'clean-cad' ? 'Clean CAD' : 'Spec sheet'}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={triggerDielinePdfExport}
+                    disabled={dielineExportingPdf}
+                    className="w-full min-h-[42px] px-2.5 py-1.5 rounded-[var(--radius-control)] flex items-start gap-2.5 text-left hover:bg-[var(--ink-3)] disabled:opacity-60 cursor-pointer transition-colors"
+                  >
+                    <FileText size={15} className="text-[var(--ink-12)] mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-medium text-[var(--ink-12)] leading-[16px]">
+                        Dieline CAD PDF (1:1 mm)
+                      </div>
+                      <div className="text-[11px] text-[var(--ink-10)] leading-[14px] mt-0.5">
+                        Unduh gambar kerja 2D skala aktual
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={triggerDielineSvgExport}
+                    className="w-full min-h-[42px] px-2.5 py-1.5 rounded-[var(--radius-control)] flex items-start gap-2.5 text-left hover:bg-[var(--ink-3)] cursor-pointer transition-colors"
+                  >
+                    <FileCode2 size={15} className="text-[var(--ink-12)] mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-medium text-[var(--ink-12)] leading-[16px]">
+                        Dieline CAD SVG (1:1 mm)
+                      </div>
+                      <div className="text-[11px] text-[var(--ink-10)] leading-[14px] mt-0.5">
+                        Unduh vektor SVG siap CAD / Illustrator
+                      </div>
+                    </div>
+                  </button>
+
+                  <hr className="my-1 -mx-1.5 border-0 border-t-[0.5px] border-[var(--line)]" />
+
+                  <div className="px-2.5 pt-0.5 pb-1 text-[11px] leading-[14px] text-[var(--ink-10)]">
+                    Palletizer &amp; Kemasan
+                  </div>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => triggerPalletExportModal('engineering')}
+                    className="w-full min-h-[42px] px-2.5 py-1.5 rounded-[var(--radius-control)] flex items-start gap-2.5 text-left hover:bg-[var(--ink-3)] cursor-pointer transition-colors"
+                  >
+                    <FileDown size={15} className="text-[var(--accent-10)] mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-medium text-[var(--ink-12)] leading-[16px]">
+                        Laporan Palletizer (PDF A4)
+                      </div>
+                      <div className="text-[11px] text-[var(--ink-10)] leading-[14px] mt-0.5">
+                        {config.pallet?.vehicle?.enabled
+                          ? '3 halaman: 4 POV 3D, Heat-Map & Armada'
+                          : '2 halaman: 4 POV 3D, Denah & Audit BCT'}
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => triggerPalletExportModal('vector')}
+                    className="w-full min-h-[42px] px-2.5 py-1.5 rounded-[var(--radius-control)] flex items-start gap-2.5 text-left hover:bg-[var(--ink-3)] cursor-pointer transition-colors"
+                  >
+                    <PenTool size={15} className="text-[var(--ink-12)] mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-medium text-[var(--ink-12)] leading-[16px]">
+                        Vektor Kemasan AI (PDF &amp; SVG)
+                      </div>
+                      <div className="text-[11px] text-[var(--ink-10)] leading-[14px] mt-0.5">
+                        Line-art transparan siap Adobe Illustrator
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Container-Adaptive Overflow Action Menu */}
             {showOverflowButton && (
               <div ref={moreMenuRef} className="relative shrink-0">
@@ -608,7 +784,10 @@ export default function App() {
                   variant="secondary"
                   size="compact"
                   className="px-2 min-w-[34px] h-[34px] md:h-[var(--control-h-compact)]"
-                  onClick={() => setMoreMenuOpen((v) => !v)}
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    setMoreMenuOpen((v) => !v);
+                  }}
                   aria-expanded={moreMenuOpen}
                   aria-haspopup="menu"
                   aria-label="Menu lainnya"
@@ -764,6 +943,11 @@ export default function App() {
               onChangeExportMode={setExportMode}
               hasMobileFloatingDock={showMobileBottomDock}
               focusMode={focusMode}
+              pdfExportTrigger={dielinePdfTrigger}
+              onPdfExportTriggered={() => setDielinePdfTrigger(0)}
+              svgExportTrigger={dielineSvgTrigger}
+              onSvgExportTriggered={() => setDielineSvgTrigger(0)}
+              onExportingPdfChange={setDielineExportingPdf}
             />
           ) : (
             <Suspense
@@ -794,6 +978,8 @@ export default function App() {
                   hasMobileFloatingDock={showMobileBottomDock}
                   isShortLandscape={isShortLandscape}
                   focusMode={focusMode}
+                  requestedExportTab={palletExportTabRequest}
+                  onHandledExportRequest={() => setPalletExportTabRequest(null)}
                 />
               )}
             </Suspense>
@@ -853,55 +1039,63 @@ export default function App() {
         )}
       </main>
 
-      {bctOpen &&
-        !focusMode &&
+      {!focusMode &&
         (isRightOverlay ? (
-          <div
-            className="fixed inset-0 z-40 flex justify-end"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Panel BCT Pro"
+          <MobileGenieSheet
+            open={bctOpen}
+            isMobileGenie={showMobileBottomDock}
+            side="right"
+            dockOrigin="center"
+            ariaLabel="Panel BCT Pro"
+            onClose={() => setBctOpen(false)}
           >
-            <div
-              className="absolute inset-0 bg-[var(--backdrop)] backdrop-blur-[2px]"
-              onClick={() => setBctOpen(false)}
-              aria-hidden="true"
-            />
+            {({ isCenteredMobile }) => (
+              <BCTInspectorRail
+                config={config}
+                paths={paths}
+                analysis={analysis}
+                userId={authUser.id}
+                onChange={setConfig}
+                onOpenEngineeringSheet={() => {
+                  setBctOpen(false);
+                  setEngineeringSheetOpen(true);
+                }}
+                onClose={() => setBctOpen(false)}
+                className={
+                  isCenteredMobile
+                    ? '!w-full !h-full !border-l-0'
+                    : 'relative z-10 shadow-[var(--shadow-modal)]'
+                }
+              />
+            )}
+          </MobileGenieSheet>
+        ) : (
+          bctOpen && (
             <BCTInspectorRail
               config={config}
               paths={paths}
               analysis={analysis}
               userId={authUser.id}
               onChange={setConfig}
-              onOpenEngineeringSheet={() => {
-                setBctOpen(false);
-                setEngineeringSheetOpen(true);
-              }}
+              onOpenEngineeringSheet={() => setEngineeringSheetOpen(true)}
               onClose={() => setBctOpen(false)}
-              className="relative z-10 shadow-[var(--shadow-modal)]"
             />
-          </div>
-        ) : (
-          <BCTInspectorRail
-            config={config}
-            paths={paths}
-            analysis={analysis}
-            userId={authUser.id}
-            onChange={setConfig}
-            onOpenEngineeringSheet={() => setEngineeringSheetOpen(true)}
-            onClose={() => setBctOpen(false)}
-          />
+          )
         ))}
 
-      {/* Mobile Floating Thumb Dock (Portrait Mobile Full-Canvas Focus + 1-Tap Panel Access) */}
+      {/* Mobile Floating Thumb Dock (Portrait Mobile Full-Canvas Focus + 1-Tap Genie Panel Access) */}
       {showMobileBottomDock && !focusMode && (
         <nav
           aria-label="Kontrol cepat mobile"
-          className="fixed bottom-3 left-1/2 -translate-x-1/2 z-30 md:hidden flex items-center gap-1 p-1 rounded-full bg-[var(--surface-top)]/95 backdrop-blur-md border-[0.5px] border-[var(--line)] shadow-[var(--shadow-modal)]"
+          className="fixed bottom-3 left-1/2 -translate-x-1/2 z-50 md:hidden flex items-center gap-1 p-1 rounded-full bg-[var(--surface-top)]/95 backdrop-blur-md border-[0.5px] border-[var(--line)] shadow-[var(--shadow-modal)]"
         >
           <button
             type="button"
-            onClick={() => setLeftRailOpen(!leftRailOpen)}
+            onClick={() => {
+              const next = !leftRailOpen;
+              if (next) setBctOpen(false);
+              setLeftRailOpen(next);
+            }}
             aria-pressed={leftRailOpen}
             className={`min-h-[42px] px-3.5 rounded-full flex items-center gap-1.5 text-[12px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
               leftRailOpen
@@ -915,7 +1109,11 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setBctOpen(!bctOpen)}
+            onClick={() => {
+              const next = !bctOpen;
+              if (next) setLeftRailOpen(false);
+              setBctOpen(next);
+            }}
             aria-pressed={bctOpen}
             className={`min-h-[42px] px-3.5 rounded-full flex items-center gap-1.5 text-[12px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
               bctOpen

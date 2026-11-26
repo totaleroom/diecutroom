@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import {
   ALL_PAPER_GRADES,
   BoxConfig,
-  CURRENCY_META,
-  CurrencyCode,
   DielinePaths,
   EngineeringAnalysis,
   FluteDirection,
@@ -12,10 +10,9 @@ import {
   PaperGradeId,
   SAFETY_FACTOR_PRESETS,
 } from '../types';
-import { formatMoney, formatSubstanceString } from '../utils/engineering';
+import { formatSubstanceString } from '../utils/engineering';
 import {
   TactileButton,
-  TactileInputWell,
   TactileSegmented,
   TactileSelect,
   TactileSheet,
@@ -61,24 +58,6 @@ export default function EngineeringSheet({
       metadata: {
         ...config.metadata,
         materialSubstance: formatSubstanceString(nextEng, config.boardGrade),
-      },
-    });
-  };
-
-  const handleCurrencyChange = (nextCurrency: CurrencyCode) => {
-    const prevDefault = CURRENCY_META[config.engineering.currency].defaultPerSqm;
-    const nextMeta = CURRENCY_META[nextCurrency];
-    const shouldResetPrice =
-      Math.abs(config.engineering.sheetCostPerSqm - prevDefault) < 0.01 ||
-      config.engineering.sheetCostPerSqm === 0;
-    onChange({
-      ...config,
-      engineering: {
-        ...config.engineering,
-        currency: nextCurrency,
-        sheetCostPerSqm: shouldResetPrice
-          ? nextMeta.defaultPerSqm
-          : config.engineering.sheetCostPerSqm,
       },
     });
   };
@@ -147,29 +126,19 @@ export default function EngineeringSheet({
       open={open}
       onClose={onClose}
       title="Corrugated engineering and pre-flight"
-      description="McKee compression modeling, sheet blank costing, and automated shop-floor defect checks."
+      description="TAPPI/ISO McKee compression modeling and automated shop-floor defect checks."
     >
       {/* Section 1: McKee BCT Compression & Safe Stacking Load */}
       <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-[16px] leading-[24px] text-[var(--ink-12)]">
-                  Box compression strength (McKee)
+                  Box compression strength (McKee · TAPPI / ISO)
                 </h3>
                 <p className="text-[13px] leading-[20px] text-[var(--ink-11)]">
-                  Synced with {config.metadata.materialSubstance} · {config.engineering.fluteId}-flute ({config.fluteThickness} mm).
+                  Synced with {config.metadata.materialSubstance} · {config.engineering.fluteId}-flute ({config.fluteThickness} mm) · Blank {Math.ceil(paths.width)} × {Math.ceil(paths.height)} mm ({analysis.grossBlankAreaSqm.toFixed(3)} m²).
                 </p>
               </div>
-              <TactileSegmented
-                value={config.engineering.calculationMethod}
-                onChange={(m) => updateEngineering('calculationMethod', m)}
-                size="compact"
-                ariaLabel="Calculation method"
-                options={[
-                  { value: 'tappi', label: 'TAPPI Calib.' },
-                  { value: 'bct-pro', label: 'BCT Pro Legacy' },
-                ]}
-              />
             </div>
 
         <div className="surface-raised bg-[var(--raised)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-5 space-y-5">
@@ -333,131 +302,7 @@ export default function EngineeringSheet({
         </div>
       </section>
 
-      {/* Section 2: Sheet Blank Area & Batch Cost Table */}
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h3 className="text-[16px] leading-[24px] text-[var(--ink-12)]">
-              Sheet utilization and batch cost
-            </h3>
-            <p className="text-[13px] leading-[20px] text-[var(--ink-11)]">
-              Gross sheet blank area versus net carton footprint after rotary slot and taper trim.
-            </p>
-          </div>
-        </div>
-
-        {/* Controls above table */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex items-end gap-3">
-            <div>
-              <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                Currency
-              </label>
-              <TactileSegmented
-                value={config.engineering.currency}
-                onChange={handleCurrencyChange}
-                size="compact"
-                ariaLabel="Costing currency"
-                options={[
-                  { value: 'IDR', label: 'IDR' },
-                  { value: 'USD', label: 'USD' },
-                  { value: 'EUR', label: 'EUR' },
-                ]}
-              />
-            </div>
-
-            <div className="w-[156px]">
-              <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                Board price per m²
-              </label>
-              <TactileInputWell
-                type="number"
-                min={0}
-                step={CURRENCY_META[config.engineering.currency].step}
-                value={config.engineering.sheetCostPerSqm}
-                onChange={(e) =>
-                  updateEngineering('sheetCostPerSqm', Math.max(0, Number(e.target.value)))
-                }
-                suffix={CURRENCY_META[config.engineering.currency].symbol}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <div>
-              <div className="text-[16px] leading-[24px] text-[var(--ink-12)] tabular-nums">
-                {analysis.grossBlankAreaSqm.toFixed(3)} m²
-              </div>
-              <div className="text-[12px] leading-[16px] text-[var(--ink-10)]">
-                Gross blank ({Math.ceil(paths.width)} x {Math.ceil(paths.height)} mm)
-              </div>
-            </div>
-            <div>
-              <div className="text-[16px] leading-[24px] text-[var(--ink-12)] tabular-nums">
-                {analysis.scrapWastePct.toFixed(1)}%
-              </div>
-              <div className="text-[12px] leading-[16px] text-[var(--ink-10)]">
-                Slot and taper trim
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Crisp Tactile Data Table (38px rows, 0.5px frame & column dividers, left-aligned tabular-nums) */}
-        <div className="surface-raised bg-[var(--raised)] rounded-[var(--radius-container)] border-[0.5px] border-[var(--line)] shadow-[var(--shadow-table)] overflow-x-auto">
-          <table className="w-full border-collapse text-left text-[13px] leading-[20px]">
-            <thead>
-              <tr className="h-[38px] border-b-[0.5px] border-[var(--line)] text-[var(--ink-12)]">
-                <th className="px-3 font-medium">Run volume</th>
-                <th className="px-3 font-medium border-l-[0.5px] border-[var(--line)]">Total sheet</th>
-                <th className="px-3 font-medium border-l-[0.5px] border-[var(--line)]">Unit price</th>
-                <th className="px-3 font-medium border-l-[0.5px] border-[var(--line)]">Batch total</th>
-                <th className="px-3 font-medium border-l-[0.5px] border-[var(--line)]">Tier</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analysis.batchTiers.map((tier, idx) => {
-                const isLast = idx === analysis.batchTiers.length - 1;
-                const dotHue =
-                  tier.statusHue === 'green'
-                    ? 'bg-[var(--green-9)]'
-                    : tier.statusHue === 'info'
-                    ? 'bg-[var(--blue-9)]'
-                    : 'bg-[var(--ink-8)]';
-                return (
-                  <tr
-                    key={tier.qty}
-                    className={`h-[38px] transition-colors duration-[var(--dur-hover)] hover:bg-[var(--root-ink-2)] ${
-                      isLast ? '' : 'border-b-[0.5px] border-[var(--line)]'
-                    }`}
-                  >
-                    <td className="px-3 text-[var(--ink-12)] tabular-nums whitespace-nowrap">
-                      {tier.label}
-                    </td>
-                    <td className="px-3 text-[var(--ink-11)] tabular-nums border-l-[0.5px] border-[var(--line)] whitespace-nowrap">
-                      {tier.totalAreaSqm.toFixed(1)} m²
-                    </td>
-                    <td className="px-3 text-[var(--ink-11)] tabular-nums border-l-[0.5px] border-[var(--line)] whitespace-nowrap">
-                      {formatMoney(tier.unitCost, config.engineering.currency)}
-                    </td>
-                    <td className="px-3 text-[var(--ink-11)] tabular-nums border-l-[0.5px] border-[var(--line)] whitespace-nowrap">
-                      {formatMoney(tier.totalCost, config.engineering.currency)}
-                    </td>
-                    <td className="px-3 text-[var(--ink-11)] border-l-[0.5px] border-[var(--line)] whitespace-nowrap">
-                      <span className="inline-flex items-center gap-2">
-                        <span className={`size-[7px] rounded-full ${dotHue}`} />
-                        <span>{tier.statusLabel}</span>
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Section 3: Field-Defect Pre-Flight Predictor */}
+      {/* Section 2: Field-Defect Pre-Flight Predictor */}
       <section className="space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div>

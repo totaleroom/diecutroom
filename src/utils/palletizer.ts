@@ -26,10 +26,15 @@ import {
   PaperGradeId,
   PerfectionistSizeSuggestion,
   PerfectionistTuningReport,
+  SteppedBoardRecommendation,
 } from '../types';
 import {
   computeBoardBurstKpa,
+  computeHandlingFactor,
+  computeHumidityFactor,
   computeMcKeeBctKgf,
+  computePrintingFactor,
+  computeStabilityFactor,
   computeSurfaceFrictionCoeff,
   estimateTappiEctFromLayers,
 } from './engineering';
@@ -2141,91 +2146,364 @@ function estimateScaledBct(
   return round1(baseCorrectedBctKgf * perimScale * stabScale);
 }
 
+interface SteppedCatalogSpec {
+  boardGrade: 'single-wall' | 'double-wall';
+  fluteId: BctFluteId;
+  topLayer: PaperGradeId;
+  mediumLayer: MediumGradeId;
+  centerLayer: PaperGradeId;
+  mediumLayer2: MediumGradeId;
+  bottomLayer: PaperGradeId;
+  recipe: string;
+}
+
+const INDONESIAN_ANTI_OVERSPEC_CATALOG: SteppedCatalogSpec[] = [
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'B',
+    topLayer: 'K125',
+    mediumLayer: 'M110',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K125',
+    recipe: 'K125/M110/K125 (B)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'C',
+    topLayer: 'K125',
+    mediumLayer: 'M125',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K125',
+    recipe: 'K125/M125/K125 (C)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'B',
+    topLayer: 'K150',
+    mediumLayer: 'M125',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K150',
+    recipe: 'K150/M125/K150 (B)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'C',
+    topLayer: 'K150',
+    mediumLayer: 'M125',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K150',
+    recipe: 'K150/M125/K150 (C)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'C',
+    topLayer: 'K150',
+    mediumLayer: 'M150',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K150',
+    recipe: 'K150/M150/K150 (C)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'C',
+    topLayer: 'K175',
+    mediumLayer: 'M150',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K175',
+    recipe: 'K175/M150/K175 (C)',
+  },
+  {
+    boardGrade: 'single-wall',
+    fluteId: 'C',
+    topLayer: 'K200',
+    mediumLayer: 'M150',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K200',
+    recipe: 'K200/M150/K200 (C)',
+  },
+  {
+    boardGrade: 'double-wall',
+    fluteId: 'BC',
+    topLayer: 'K125',
+    mediumLayer: 'M125',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K125',
+    recipe: 'K125/M125/M125/M125/K125 (BC)',
+  },
+  {
+    boardGrade: 'double-wall',
+    fluteId: 'BC',
+    topLayer: 'K150',
+    mediumLayer: 'M125',
+    centerLayer: 'M125',
+    mediumLayer2: 'M125',
+    bottomLayer: 'K150',
+    recipe: 'K150/M125/M125/M125/K150 (BC)',
+  },
+  {
+    boardGrade: 'double-wall',
+    fluteId: 'BC',
+    topLayer: 'K150',
+    mediumLayer: 'M150',
+    centerLayer: 'M125',
+    mediumLayer2: 'M150',
+    bottomLayer: 'K150',
+    recipe: 'K150/M150/M125/M150/K150 (BC)',
+  },
+  {
+    boardGrade: 'double-wall',
+    fluteId: 'BC',
+    topLayer: 'K200',
+    mediumLayer: 'M150',
+    centerLayer: 'M125',
+    mediumLayer2: 'M150',
+    bottomLayer: 'K200',
+    recipe: 'K200/M150/M125/M150/K200 (BC)',
+  },
+  {
+    boardGrade: 'double-wall',
+    fluteId: 'AB',
+    topLayer: 'K200',
+    mediumLayer: 'M150',
+    centerLayer: 'M150',
+    mediumLayer2: 'M150',
+    bottomLayer: 'K200',
+    recipe: 'K200/M150/M150/M150/K200 (AB)',
+  },
+];
+
+function computeBoardNominalGsm(
+  boardGrade: 'single-wall' | 'double-wall',
+  fluteId: BctFluteId,
+  top: PaperGradeId,
+  med1: MediumGradeId,
+  center: PaperGradeId,
+  med2: MediumGradeId,
+  bot: PaperGradeId
+): number {
+  const fSpec = FLUTE_SPECS[fluteId] || FLUTE_SPECS.C;
+  const gTop = ALL_PAPER_GRADES[top]?.gsm ?? 150;
+  const gMed1 = ALL_PAPER_GRADES[med1]?.gsm ?? 125;
+  const gCenter = ALL_PAPER_GRADES[center]?.gsm ?? 125;
+  const gMed2 = ALL_PAPER_GRADES[med2]?.gsm ?? 125;
+  const gBot = ALL_PAPER_GRADES[bot]?.gsm ?? 150;
+  if (boardGrade === 'double-wall') {
+    return Math.round(
+      gTop + gMed1 * fSpec.tuf1 + gCenter + gMed2 * (fSpec.tuf2 ?? fSpec.tuf1) + gBot
+    );
+  }
+  return Math.round(gTop + gMed1 * fSpec.tuf1 + gBot);
+}
+
+/**
+ * Evaluates Indonesian corrugated catalog from lightest SW -> heaviest DW and returns
+ * 2-3 stepped anti-overspec candidates (Paling Pas, Seimbang, Cadangan) driven by
+ * actual product net weight, pallet bottom-layer load, and Indonesian RH/Handling/SF.
+ */
 function buildBoardSpecAdvice(
   eng: EngineeringConfig,
   boardGrade: 'single-wall' | 'double-wall',
   innerDims: BoxDimensions,
-  caliperMm: number,
+  _caliperMm: number,
   currentCorrectedBctKgf: number,
   requiredLayerLoadKgf: number,
   safetyFactor: number,
-  burstStatus: PalletStabilityMetrics['burstStatus']
+  _burstStatus: PalletStabilityMetrics['burstStatus'],
+  caseGrossKg = 1.5,
+  patternAlignmentFactor = 1.0,
+  overhangPenaltyFactor = 1.0
 ): BoardSpecAdvice | null {
-  const needsUpgrade =
-    burstStatus !== 'strong' ||
-    eng.bottomLayer.startsWith('M') ||
-    (requiredLayerLoadKgf > 0 && currentCorrectedBctKgf / requiredLayerLoadKgf < safetyFactor);
+  const currentGsm = computeBoardNominalGsm(
+    boardGrade,
+    eng.fluteId,
+    eng.topLayer,
+    eng.mediumLayer,
+    eng.centerLayer,
+    eng.mediumLayer2,
+    eng.bottomLayer
+  );
 
-  if (!needsUpgrade) return null;
+  // Use true environmental derating factors from current Indonesian operating settings
+  const envFactor =
+    computePrintingFactor(eng.printCoverage, 0) *
+    computeHumidityFactor(eng.relativeHumidity) *
+    computeHandlingFactor(eng.handlingRisk) *
+    computeStabilityFactor(innerDims.depth, innerDims.length, innerDims.width);
+  const palletPatternFactor = Math.max(0.45, patternAlignmentFactor * overhangPenaltyFactor);
 
-  const targetCandidates: Array<{
-    top: PaperGradeId;
-    med: MediumGradeId;
-    bot: PaperGradeId;
-    flute: BctFluteId;
-    dw: 'single-wall' | 'double-wall';
-    label: string;
-  }> = [
-    { top: eng.topLayer, med: eng.mediumLayer, bot: 'K150', flute: eng.fluteId, dw: boardGrade, label: `${eng.topLayer}/${eng.mediumLayer}/K150 (${eng.fluteId})` },
-    { top: 'K150', med: 'M150', bot: 'K150', flute: eng.fluteId, dw: boardGrade, label: `K150/M150/K150 (${eng.fluteId})` },
-    { top: 'K175', med: 'M150', bot: 'K175', flute: eng.fluteId, dw: boardGrade, label: `K175/M150/K175 (${eng.fluteId})` },
-    { top: 'K150', med: 'M125', bot: 'K150', flute: 'BC', dw: 'double-wall', label: 'K150/M125/M125/M125/K150 (BC)' },
-  ];
+  // Required effective pallet BCT per carton on bottom layer (with realistic floor for 1-layer stacks)
+  const effectiveLoadKgf = Math.max(requiredLayerLoadKgf, caseGrossKg * 1.25);
+  const targetBctKgf = effectiveLoadKgf * Math.max(1.5, safetyFactor);
+  // Minimum practical burst strength scales with case gross weight (avoid overspec on light 1-3 kg cartons)
+  const minBurstKpa = Math.min(1150, Math.max(620, Math.round(580 + caseGrossKg * 32)));
 
-  const perimMm = 2 * (innerDims.length + 2 * caliperMm + innerDims.width + 2 * caliperMm);
-
-  for (const cand of targetCandidates) {
-    if (
-      cand.top === eng.topLayer &&
-      cand.med === eng.mediumLayer &&
-      cand.bot === eng.bottomLayer &&
-      cand.flute === eng.fluteId &&
-      cand.dw === boardGrade
-    ) {
-      continue;
-    }
+  const evaluated = INDONESIAN_ANTI_OVERSPEC_CATALOG.map((spec) => {
+    const fSpec = FLUTE_SPECS[spec.fluteId] || FLUTE_SPECS.C;
     const candEng: EngineeringConfig = {
       ...eng,
-      fluteId: cand.flute,
-      topLayer: cand.top,
-      mediumLayer: cand.med,
-      bottomLayer: cand.bot,
-      centerLayer: cand.dw === 'double-wall' ? 'M125' : eng.centerLayer,
-      mediumLayer2: cand.dw === 'double-wall' ? 'M125' : eng.mediumLayer2,
+      fluteId: spec.fluteId,
+      topLayer: spec.topLayer,
+      mediumLayer: spec.mediumLayer,
+      centerLayer: spec.centerLayer,
+      mediumLayer2: spec.mediumLayer2,
+      bottomLayer: spec.bottomLayer,
     };
     const key =
-      cand.dw === 'double-wall'
-        ? `${candEng.topLayer}-${candEng.mediumLayer}-${candEng.centerLayer}-${candEng.mediumLayer2}-${candEng.bottomLayer}-${candEng.fluteId}`
-        : `${candEng.topLayer}-${candEng.mediumLayer}-${candEng.bottomLayer}-${candEng.fluteId}`;
-    const ect =
+      spec.boardGrade === 'double-wall'
+        ? `${spec.topLayer}-${spec.mediumLayer}-${spec.centerLayer}-${spec.mediumLayer2}-${spec.bottomLayer}-${spec.fluteId}`
+        : `${spec.topLayer}-${spec.mediumLayer}-${spec.bottomLayer}-${spec.fluteId}`;
+    const ectKgfCm =
       EXTENDED_STANDARD_ECT_TABLE[key] ??
-      estimateTappiEctFromLayers(candEng, cand.flute, cand.dw, eng.customRct);
-    const fSpec = FLUTE_SPECS[cand.flute] || FLUTE_SPECS.C;
-    const rawBct = computeMcKeeBctKgf(ect, fSpec.thickness, perimMm);
-    const burstKpa = computeBoardBurstKpa(candEng, cand.dw);
-    const ratio = currentCorrectedBctKgf > 0 ? rawBct / Math.max(1, computeMcKeeBctKgf(eng.ectValue / 5.59974 || ect, caliperMm, perimMm)) : 1.15;
-    const estCorrected = round1(Math.max(currentCorrectedBctKgf * 1.1, currentCorrectedBctKgf * Math.max(1.05, ratio)));
-    const bctGainPct = Math.round(((estCorrected - currentCorrectedBctKgf) / Math.max(1, currentCorrectedBctKgf)) * 100);
+      estimateTappiEctFromLayers(candEng, spec.fluteId, spec.boardGrade, eng.customRct);
+    const outerPerimMm =
+      2 * (innerDims.length + 2 * fSpec.thickness + innerDims.width + 2 * fSpec.thickness);
+    const rawBctKgf = computeMcKeeBctKgf(ectKgfCm, fSpec.thickness, outerPerimMm);
+    const correctedBctKgf = round1(rawBctKgf * envFactor);
+    const effectivePalletBct = correctedBctKgf * palletPatternFactor;
+    const maxSafeStackLoadKgf = round1(effectivePalletBct / Math.max(1.5, safetyFactor));
+    const achievedSafetyFactor =
+      effectiveLoadKgf > 0 ? round1(effectivePalletBct / effectiveLoadKgf) : safetyFactor;
+    const burstKpa = computeBoardBurstKpa(candEng, spec.boardGrade);
+    const boardGsm = computeBoardNominalGsm(
+      spec.boardGrade,
+      spec.fluteId,
+      spec.topLayer,
+      spec.mediumLayer,
+      spec.centerLayer,
+      spec.mediumLayer2,
+      spec.bottomLayer
+    );
+    const gsmDeltaPct = Math.round(((boardGsm - currentGsm) / Math.max(1, currentGsm)) * 100);
+    const isCurrentSpec =
+      spec.boardGrade === boardGrade &&
+      spec.fluteId === eng.fluteId &&
+      spec.topLayer === eng.topLayer &&
+      spec.mediumLayer === eng.mediumLayer &&
+      spec.bottomLayer === eng.bottomLayer &&
+      (spec.boardGrade === 'single-wall' ||
+        (spec.centerLayer === eng.centerLayer && spec.mediumLayer2 === eng.mediumLayer2));
 
-    if (burstKpa >= 860 && (requiredLayerLoadKgf <= 0 || estCorrected / requiredLayerLoadKgf >= Math.min(safetyFactor, 3.2))) {
-      const botWasMedium = eng.bottomLayer.startsWith('M');
-      return {
-        recommendedRecipe: cand.label,
-        topLayer: cand.top,
-        mediumLayer: cand.med,
-        bottomLayer: cand.bot,
-        fluteId: cand.flute,
-        burstKpa,
-        ectKgfCm: ect,
-        bctKgf: estCorrected,
-        bctGainPct: Math.max(10, bctGainPct),
-        reason: botWasMedium
-          ? `Ganti inner liner ${ALL_PAPER_GRADES[eng.bottomLayer]?.name || eng.bottomLayer} menjadi ${cand.bot} menaikkan ketahanan pecah ke ${burstKpa} kPa dan mendongkrak BCT tanpa ubah ukuran dus.`
-          : `Upgrade ke ${cand.label} menaikkan ketahanan pecah (${burstKpa} kPa) & batas aman tumpukan bawah.`,
-      };
+    const passes = effectivePalletBct >= targetBctKgf && burstKpa >= minBurstKpa;
+    return {
+      spec,
+      ectKgfCm: round1(ectKgfCm),
+      correctedBctKgf,
+      effectivePalletBct,
+      maxSafeStackLoadKgf,
+      achievedSafetyFactor,
+      burstKpa,
+      boardGsm,
+      gsmDeltaPct,
+      isCurrentSpec,
+      passes,
+    };
+  }).sort((a, b) => a.boardGsm - b.boardGsm || a.correctedBctKgf - b.correctedBctKgf);
+
+  const passing = evaluated.filter((item) => item.passes);
+  // Pick 2-3 stepped candidates starting strictly from the closest passing grade (anti-overspec!)
+  const pickedRaw: typeof evaluated = [];
+  if (passing.length > 0) {
+    pickedRaw.push(passing[0]); // 1. Closest-fit (minimum safe, zero overspec)
+    const balanced = passing.find(
+      (item) =>
+        item.spec.recipe !== passing[0].spec.recipe &&
+        item.effectivePalletBct >= passing[0].effectivePalletBct * 1.12
+    );
+    if (balanced) pickedRaw.push(balanced);
+    const reserve = passing.find(
+      (item) =>
+        !pickedRaw.some((p) => p.spec.recipe === item.spec.recipe) &&
+        item.effectivePalletBct >= (balanced ?? passing[0]).effectivePalletBct * 1.15
+    );
+    if (reserve) pickedRaw.push(reserve);
+    // Ensure at least 2 options when passing has >= 2
+    if (pickedRaw.length < 2 && passing.length >= 2) {
+      const next = passing.find((item) => item.spec.recipe !== pickedRaw[0].spec.recipe);
+      if (next) pickedRaw.push(next);
     }
+  } else {
+    // Even heaviest catalog spec is stressed — offer top 2 strongest candidates
+    pickedRaw.push(...evaluated.slice(-2));
   }
-  return null;
+
+  const tierMeta: Array<{ tier: SteppedBoardRecommendation['tier']; label: string }> = [
+    { tier: 'closest', label: 'Paling Pas' },
+    { tier: 'balanced', label: 'Seimbang' },
+    { tier: 'reserve', label: 'Cadangan' },
+  ];
+
+  const candidates: SteppedBoardRecommendation[] = pickedRaw.slice(0, 3).map((item, idx) => {
+    const meta = tierMeta[idx] || tierMeta[2];
+    const deltaTag =
+      item.isCurrentSpec
+        ? 'Spek aktif saat ini'
+        : item.gsmDeltaPct < -4
+        ? `Lebih hemat ${Math.abs(item.gsmDeltaPct)}% GSM (hindari overspec)`
+        : item.gsmDeltaPct > 4
+        ? `+${item.gsmDeltaPct}% GSM · SF ${item.achievedSafetyFactor}x`
+        : `GSM setara · SF ${item.achievedSafetyFactor}x`;
+    return {
+      tier: meta.tier,
+      tierLabel: meta.label,
+      recipe: item.spec.recipe,
+      boardGrade: item.spec.boardGrade,
+      fluteId: item.spec.fluteId,
+      topLayer: item.spec.topLayer,
+      mediumLayer: item.spec.mediumLayer,
+      centerLayer: item.spec.centerLayer,
+      mediumLayer2: item.spec.mediumLayer2,
+      bottomLayer: item.spec.bottomLayer,
+      ectKgfCm: item.ectKgfCm,
+      bctKgf: item.correctedBctKgf,
+      maxSafeStackLoadKgf: item.maxSafeStackLoadKgf,
+      achievedSafetyFactor: item.achievedSafetyFactor,
+      burstKpa: item.burstKpa,
+      boardGsm: item.boardGsm,
+      gsmDeltaPct: item.gsmDeltaPct,
+      isCurrentSpec: item.isCurrentSpec,
+      summaryNote: deltaTag,
+    };
+  });
+
+  if (candidates.length === 0) return null;
+  const primary = candidates[0];
+  const bctGainPct = Math.round(
+    ((primary.bctKgf - currentCorrectedBctKgf) / Math.max(1, currentCorrectedBctKgf)) * 100
+  );
+
+  const currentTooWeak =
+    currentCorrectedBctKgf * palletPatternFactor < targetBctKgf;
+  const currentOverspec =
+    !currentTooWeak && !primary.isCurrentSpec && primary.gsmDeltaPct <= -10;
+
+  return {
+    recommendedRecipe: primary.recipe,
+    boardGrade: primary.boardGrade,
+    topLayer: primary.topLayer,
+    mediumLayer: primary.mediumLayer,
+    centerLayer: primary.centerLayer,
+    mediumLayer2: primary.mediumLayer2,
+    bottomLayer: primary.bottomLayer,
+    fluteId: primary.fluteId,
+    burstKpa: primary.burstKpa,
+    ectKgfCm: primary.ectKgfCm,
+    bctKgf: primary.bctKgf,
+    bctGainPct,
+    reason: currentTooWeak
+      ? `Beban tumpukan (${effectiveLoadKgf.toFixed(1)} kgf) membutuhkan minimal ${primary.recipe} agar aman di SF ${safetyFactor}:1.`
+      : currentOverspec
+      ? `Spek saat ini melebihi kebutuhan (${effectiveLoadKgf.toFixed(1)} kgf) — ${primary.recipe} tetap aman dengan material lebih efisien.`
+      : `Spek terdekat untuk beban ${effectiveLoadKgf.toFixed(1)} kgf/dus (SF ${safetyFactor}:1, RH ${eng.relativeHumidity}%).`,
+    candidates,
+  };
 }
 
 /**
@@ -2489,7 +2767,10 @@ export function computePerfectionistTuningReport(
         correctedBctKgf,
         baselineEval.bottomLayerLoadKgf,
         safetyFactor,
-        baselineEval.stability.burstStatus
+        baselineEval.stability.burstStatus,
+        caseGrossKg,
+        baselineEval.patternAlignmentFactor,
+        baselineEval.overhangPenaltyFactor
       )
     : null;
 

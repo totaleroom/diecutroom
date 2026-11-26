@@ -16,8 +16,10 @@ import {
 } from '../types';
 import { fromMm, toMm, formatValue, validateITF14, fixITF14CheckDigit } from '../utils/units';
 import {
+  computeCaseGrossWeightKg,
   computeWeightedPrintCoverage,
   formatSubstanceString,
+  getEffectiveProductNetWeightKg,
   parseSubstanceString,
 } from '../utils/engineering';
 import { Sparkles, ArrowUpRight, Info, PanelLeftClose } from 'lucide-react';
@@ -675,6 +677,62 @@ export default function Sidebar({
                   </div>
                 </div>
               )}
+
+              {/* Berat Nett Produk (Sinkron dengan BCT, Heat-Map & Rekomendasi Material) */}
+              {(() => {
+                const effectiveNetKg = getEffectiveProductNetWeightKg(config);
+                const grossKg = computeCaseGrossWeightKg(
+                  effectiveNetKg,
+                  analysis.netBoxAreaSqm,
+                  analysis.boardGsm
+                );
+                const tareKg = Math.max(0.05, grossKg - effectiveNetKg);
+                return (
+                  <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[12px] leading-[16px] font-medium text-[var(--ink-12)]">
+                        Berat nett produk / dus
+                      </label>
+                      <span className="text-[11px] font-mono tabular-nums text-[var(--ink-10)]">
+                        Kotor ~{grossKg.toFixed(2)} kg
+                      </span>
+                    </div>
+                    <TactileInputWell
+                      type="number"
+                      mono
+                      min={0.1}
+                      max={200}
+                      step="0.1"
+                      placeholder="1.0"
+                      value={config.product.netWeightKg ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim();
+                        if (raw === '') {
+                          onChange({
+                            ...config,
+                            product: { ...config.product, netWeightKg: undefined },
+                          });
+                          return;
+                        }
+                        const parsed = Number(raw);
+                        if (Number.isFinite(parsed) && parsed >= 0) {
+                          onChange({
+                            ...config,
+                            product: {
+                              ...config.product,
+                              netWeightKg: Math.min(200, Math.round(parsed * 100) / 100),
+                            },
+                          });
+                        }
+                      }}
+                      suffix="kg"
+                    />
+                    <p className="text-[11px] leading-[15px] text-[var(--ink-10)]">
+                      Default 1.0 kg jika kosong · Tare karton ~{tareKg.toFixed(2)} kg · Mempengaruhi heat-map &amp; saran material.
+                    </p>
+                  </div>
+                );
+              })()}
             </section>
 
             <hr className="border-0 border-t-[0.5px] border-[var(--line)]" />

@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import {
   ALL_PAPER_GRADES,
-  BctCalculationMethod,
   BctFluteId,
   BctHistoryEntry,
   BoxConfig,
@@ -34,6 +33,7 @@ import {
   formatMaterialsSummary,
   formatSubstanceString,
   getEffectiveRct,
+  getIndonesianHumidityContext,
   getPrintCoverageDescription,
   getRecommendedCoverageHint,
   KGF_CM_TO_LBF_IN,
@@ -60,7 +60,7 @@ interface BCTInspectorRailProps {
   className?: string;
 }
 
-type RailTab = 'calculator' | 'audit' | 'history' | 'compare';
+type RailTab = 'calculator' | 'history' | 'compare';
 
 const PANEL_CYCLE_STEPS = [0, 15, 35, 65, 90];
 
@@ -589,9 +589,7 @@ export default function BCTInspectorRail({
       : 'Estimated (RCT)';
 
   const coverageHint = getRecommendedCoverageHint(config.metadata.printColorsCount);
-  const { tappi, bctPro, ectDiffPct, correctedBctDiffPct, auditFindings } =
-    analysis.methodComparison;
-  const showAuditBadge = Math.abs(correctedBctDiffPct) >= 3;
+  const humidityContext = getIndonesianHumidityContext(eng.relativeHumidity);
 
   // Normalized panel flex weights for the visual coverage mini-strip
   const L = Math.max(40, config.dimensions.length);
@@ -619,8 +617,7 @@ export default function BCTInspectorRail({
             BCT Engineering
           </h2>
           <p className="text-[12px] leading-[16px] text-[var(--ink-10)] truncate">
-            {eng.calculationMethod === 'tappi' ? 'TAPPI Calibrated' : 'BCT Pro Legacy'} ·{' '}
-            {isDoubleWall ? '5-ply DW' : '3-ply SW'}
+            TAPPI / ISO Calibrated · {isDoubleWall ? '5-ply DW' : '3-ply SW'}
           </p>
         </div>
 
@@ -640,7 +637,7 @@ export default function BCTInspectorRail({
               type="button"
               onClick={onClose}
               aria-label="Minimize BCT sidebar"
-              title="Minimize BCT Pro"
+              title="Minimize BCT Inspector"
               className="size-[34px] md:size-[28px] rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] active:scale-[0.95] transition-colors cursor-pointer shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]"
             >
               <PanelRightClose size={15} />
@@ -649,7 +646,7 @@ export default function BCTInspectorRail({
         </div>
       </div>
 
-      {/* 4 Compact Sub-Tabs: Calc | Audit | Hist | Cmp */}
+      {/* 3 Compact Sub-Tabs: Calc | Hist | Cmp */}
       <div className="px-4 py-2.5 border-b-[0.5px] border-[var(--line)]">
         <TactileSegmented
           value={activeTab}
@@ -660,7 +657,6 @@ export default function BCTInspectorRail({
           ariaLabel="BCT workspace section"
           options={[
             { value: 'calculator', label: 'Calc' },
-            { value: 'audit', label: 'Audit' },
             { value: 'history', label: `Hist (${history.length})` },
             { value: 'compare', label: 'Cmp' },
           ]}
@@ -671,21 +667,6 @@ export default function BCTInspectorRail({
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {activeTab === 'calculator' && (
           <>
-            {/* Formula Engine Selector */}
-            <TactileSegmented
-              value={eng.calculationMethod}
-              onChange={(m: BctCalculationMethod) =>
-                updateEngineering('calculationMethod', m)
-              }
-              fullWidth
-              size="compact"
-              ariaLabel="BCT formula engine"
-              options={[
-                { value: 'tappi', label: 'TAPPI Calibrated' },
-                { value: 'bct-pro', label: 'BCT Pro Legacy' },
-              ]}
-            />
-
             {/* Primary Result Summary Card */}
             <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3.5 space-y-3">
               <div className="flex items-start justify-between gap-2">
@@ -725,23 +706,6 @@ export default function BCTInspectorRail({
                   {config.fluteThickness}mm · {analysis.boardGsm} gsm
                 </span>
               </div>
-
-              {showAuditBadge && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('audit')}
-                  className="w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--ink-2)] hover:bg-[var(--root-ink-3)] text-left flex items-center justify-between text-[11px] leading-[15px] cursor-pointer transition-colors duration-[var(--dur-hover)]"
-                >
-                  <span className="text-[var(--ink-11)]">
-                    Audit delta vs{' '}
-                    {eng.calculationMethod === 'tappi' ? 'BCT Pro Legacy' : 'TAPPI Calib.'}
-                  </span>
-                  <span className="font-mono tabular-nums text-[var(--amber-11)]">
-                    {correctedBctDiffPct > 0 ? '+' : ''}
-                    {correctedBctDiffPct.toFixed(1)}% · Inspect →
-                  </span>
-                </button>
-              )}
 
               {/* Compact Inline Correction Factors */}
               <div className="pt-2 border-t-[0.5px] border-[var(--line)] grid grid-cols-3 gap-x-2 gap-y-1.5 text-[11px] leading-[15px]">
@@ -805,7 +769,7 @@ export default function BCTInspectorRail({
                   variant="secondary"
                   size="compact"
                   onClick={onOpenEngineeringSheet}
-                  title="Open full costing & pre-flight checks"
+                  title="Open pre-flight & BCT breakdown"
                 >
                   <ArrowUpRight size={14} />
                 </TactileButton>
@@ -1303,37 +1267,46 @@ export default function BCTInspectorRail({
                 </p>
               )}
 
-              {/* Relative Humidity */}
+              {/* Relative Humidity (Kalibrasi Iklim Tropis Indonesia — BMKG / FBA / TAPPI) */}
               <div className="space-y-1.5 pt-0.5">
                 <div className="flex items-center justify-between">
                   <label className="text-[12px] leading-[16px] text-[var(--ink-11)]">
-                    Relative humidity
+                    Kelembaban relatif (RH)
                   </label>
                   <span className="text-[12px] font-mono tabular-nums text-[var(--ink-12)]">
-                    {eng.relativeHumidity}% RH
+                    {eng.relativeHumidity}% RH · {(analysis.factors.humidity * 100).toFixed(0)}% BCT
                   </span>
                 </div>
                 <input
                   type="range"
-                  min={30}
-                  max={90}
-                  value={eng.relativeHumidity}
+                  min={50}
+                  max={95}
+                  step={1}
+                  value={Math.max(50, Math.min(95, eng.relativeHumidity))}
                   onChange={(e) =>
                     updateEngineering('relativeHumidity', Number(e.target.value))
                   }
                   className="tactile-range"
                   aria-label="Relative humidity"
                 />
+                <p className="text-[10.5px] leading-[14.5px] text-[var(--ink-10)]">
+                  <span className="font-medium text-[var(--ink-11)]">
+                    {humidityContext.label}:
+                  </span>{' '}
+                  {humidityContext.detail}
+                </p>
               </div>
 
-              {/* Handling Risk */}
-              <div className="flex items-center justify-between pt-0.5">
-                <div>
+              {/* Handling Risk (Distribusi & Bongkar-Muat Indonesia) */}
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <div className="min-w-0">
                   <div className="text-[12px] leading-[18px] text-[var(--ink-11)]">
-                    Handling risk factor
+                    Risiko handling &amp; transit
                   </div>
                   <div className="text-[11px] leading-[15px] text-[var(--ink-10)]">
-                    -15% rough transit / manual drops
+                    {eng.handlingRisk
+                      ? '-18% bongkar-muat manual / LTL Indonesia (×0.82)'
+                      : 'Gudang modern full-forklift & palletized (×1.00)'}
                   </div>
                 </div>
                 <TactileSwitch
@@ -1344,193 +1317,6 @@ export default function BCTInspectorRail({
               </div>
             </section>
           </>
-        )}
-
-        {activeTab === 'audit' && (
-          <div className="space-y-3.5">
-            <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[13px] leading-[18px] text-[var(--ink-12)]">
-                    Formula Audit Comparison
-                  </div>
-                  <div className="text-[11px] leading-[15px] text-[var(--ink-10)]">
-                    Active:{' '}
-                    {eng.calculationMethod === 'tappi'
-                      ? 'TAPPI Calibrated'
-                      : 'BCT Pro Legacy'}
-                  </div>
-                </div>
-                <TactileButton
-                  type="button"
-                  variant="secondary"
-                  size="compact"
-                  onClick={() =>
-                    updateEngineering(
-                      'calculationMethod',
-                      eng.calculationMethod === 'tappi' ? 'bct-pro' : 'tappi'
-                    )
-                  }
-                >
-                  Use {eng.calculationMethod === 'tappi' ? 'Legacy' : 'TAPPI'}
-                </TactileButton>
-              </div>
-            </div>
-
-            {/* Side-by-Side Comparison Table */}
-            <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] border-[0.5px] border-[var(--line)] shadow-[var(--shadow-table)] overflow-hidden">
-              <table className="w-full border-collapse text-left text-[12px] leading-[16px]">
-                <thead>
-                  <tr className="h-[34px] border-b-[0.5px] border-[var(--line)] text-[var(--ink-12)]">
-                    <th className="px-2.5 font-medium">Metric</th>
-                    <th className="px-2 font-medium border-l-[0.5px] border-[var(--line)]">
-                      TAPPI
-                    </th>
-                    <th className="px-2 font-medium border-l-[0.5px] border-[var(--line)]">
-                      Legacy
-                    </th>
-                    <th className="px-2 font-medium border-l-[0.5px] border-[var(--line)]">
-                      Diff
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    {
-                      label: 'ECT',
-                      unitText: forceUnit === 'kgf' ? 'kgf/cm' : 'lbf/in',
-                      vT: tappi.ectKgfCm,
-                      vL: bctPro.ectKgfCm,
-                      fmt: formatEctNumber,
-                      diffPct: ectDiffPct,
-                    },
-                    {
-                      label: 'Perim.',
-                      unitText: 'OD vs ID mm',
-                      vT: tappi.perimeterMm,
-                      vL: bctPro.perimeterMm,
-                      fmt: (v: number) => `${v.toFixed(0)}`,
-                      diffPct:
-                        bctPro.perimeterMm > 0
-                          ? ((tappi.perimeterMm - bctPro.perimeterMm) /
-                              bctPro.perimeterMm) *
-                            100
-                          : 0,
-                    },
-                    {
-                      label: 'Raw BCT',
-                      unitText: forceUnit,
-                      vT: tappi.bctEstimateKgf,
-                      vL: bctPro.bctEstimateKgf,
-                      fmt: formatForce,
-                      diffPct:
-                        bctPro.bctEstimateKgf > 0
-                          ? ((tappi.bctEstimateKgf - bctPro.bctEstimateKgf) /
-                              bctPro.bctEstimateKgf) *
-                            100
-                          : 0,
-                    },
-                    {
-                      label: 'Factor',
-                      unitText: 'combined %',
-                      vT: tappi.factors.combined * 100,
-                      vL: bctPro.factors.combined * 100,
-                      fmt: (v: number) => `${v.toFixed(0)}%`,
-                      diffPct:
-                        bctPro.factors.combined > 0
-                          ? ((tappi.factors.combined - bctPro.factors.combined) /
-                              bctPro.factors.combined) *
-                            100
-                          : 0,
-                    },
-                    {
-                      label: 'Corrected',
-                      unitText: forceUnit,
-                      vT: tappi.correctedBctKgf,
-                      vL: bctPro.correctedBctKgf,
-                      fmt: formatForce,
-                      diffPct: correctedBctDiffPct,
-                    },
-                    {
-                      label: 'Max Stack',
-                      unitText: `${eng.safetyFactor}:1 ${forceUnit}`,
-                      vT: tappi.maxStackingLoadKgf,
-                      vL: bctPro.maxStackingLoadKgf,
-                      fmt: formatForce,
-                      diffPct:
-                        bctPro.maxStackingLoadKgf > 0
-                          ? ((tappi.maxStackingLoadKgf - bctPro.maxStackingLoadKgf) /
-                              bctPro.maxStackingLoadKgf) *
-                            100
-                          : 0,
-                    },
-                  ].map((row, idx, arr) => {
-                    const sign = row.diffPct > 0.05 ? '+' : '';
-                    const hueClass =
-                      Math.abs(row.diffPct) < 0.2
-                        ? 'text-[var(--ink-10)]'
-                        : row.diffPct > 0
-                        ? 'text-[var(--green-11)]'
-                        : 'text-[var(--red-11)]';
-
-                    return (
-                      <tr
-                        key={row.label}
-                        className={`h-[38px] ${
-                          idx === arr.length - 1
-                            ? ''
-                            : 'border-b-[0.5px] border-[var(--line)]'
-                        }`}
-                      >
-                        <td className="px-2.5 text-[var(--ink-12)]">
-                          <div>{row.label}</div>
-                          <div className="text-[10px] text-[var(--ink-10)]">
-                            {row.unitText}
-                          </div>
-                        </td>
-                        <td className="px-2 font-mono tabular-nums text-[var(--ink-12)] border-l-[0.5px] border-[var(--line)]">
-                          {row.fmt(row.vT)}
-                        </td>
-                        <td className="px-2 font-mono tabular-nums text-[var(--ink-10)] border-l-[0.5px] border-[var(--line)]">
-                          {row.fmt(row.vL)}
-                        </td>
-                        <td
-                          className={`px-2 font-mono tabular-nums border-l-[0.5px] border-[var(--line)] ${hueClass}`}
-                        >
-                          {sign}
-                          {row.diffPct.toFixed(1)}%
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Technical Audit Notes */}
-            <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] border-[0.5px] border-[var(--line)] shadow-[var(--shadow-table)] divide-y-[0.5px] divide-[var(--line)] overflow-hidden">
-              {auditFindings.map((note) => (
-                <div key={note.id} className="p-3 space-y-1">
-                  <div className="flex items-start gap-2">
-                    <span
-                      className={`mt-[5px] size-[7px] rounded-full shrink-0 ${
-                        note.severity === 'warning'
-                          ? 'bg-[var(--amber-9)]'
-                          : 'bg-[var(--blue-9)]'
-                      }`}
-                      aria-hidden="true"
-                    />
-                    <div className="text-[12px] leading-[17px] text-[var(--ink-12)]">
-                      {note.title}
-                    </div>
-                  </div>
-                  <p className="pl-[15px] text-[11px] leading-[16px] text-[var(--ink-10)]">
-                    {note.detail}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
         )}
 
         {activeTab === 'history' && (
@@ -1599,8 +1385,7 @@ export default function BCTInspectorRail({
                             </span>
                           </div>
                           <div className="mt-1 text-[11px] leading-[15px] text-[var(--ink-10)] tabular-nums">
-                            {dateLabel} ·{' '}
-                            {item.calculationMethod === 'bct-pro' ? 'Legacy' : 'TAPPI'} · Click to load
+                            {dateLabel} · TAPPI/ISO · Click to load
                           </div>
                         </button>
 

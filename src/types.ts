@@ -144,6 +144,7 @@ export interface BoxConfig {
     length: number;
     width: number;
     depth: number;
+    netWeightKg?: number; // Net product weight inside 1 master carton (kg, default 1.0 kg)
     tolerancePreset: TolerancePreset;
     clearanceL: number;
     clearanceW: number;
@@ -574,11 +575,10 @@ export const SAFETY_FACTOR_PRESETS: Array<{
   label: string;
   environment: string;
 }> = [
-  { value: 2.2, label: '2.2:1 · Light Warehouse', environment: 'Dry indoor storage, short term' },
-  { value: 3, label: '3:1 · Standard Transit', environment: 'Controlled humidity, < 30 days' },
-  { value: 4, label: '4:1 · Multi-Tier Stack', environment: 'General palletization, 30-90 days' },
-  { value: 5, label: '5:1 · Industrial (BCT Pro)', environment: 'Standard BCT Pro default factor' },
-  { value: 6, label: '6:1 · Export / Cold Chain', environment: 'High humidity or long sea freight' },
+  { value: 3, label: '3:1 · Gudang AC & Cepat', environment: 'Rotasi < 14 hari, full forklift, RH <= 65%' },
+  { value: 4, label: '4:1 · Distribusi Indonesia', environment: 'Default · 14–30 hari, gudang non-AC, truk boks' },
+  { value: 5, label: '5:1 · Musim Hujan / Antarpulau', environment: '30–60 hari, RH >= 80%, truk jauh / RORO' },
+  { value: 6, label: '6:1 · Ekspor Laut / Cold Chain', environment: '> 60 hari, kontainer laut / kondensasi tinggi' },
 ];
 
 export const PRINT_COVERAGE_PRESETS: Array<{
@@ -1105,6 +1105,7 @@ export interface PalletConfig {
   selectedCandidateKey?: string | null;
   recommendationMode?: 'smart' | 'max-density';
   manualLayerCount: number | null;
+  vehicle?: PalletVehicleConfig;
 }
 
 export interface PalletBoxPlacement {
@@ -1200,10 +1201,35 @@ export interface PerfectionistSizeSuggestion {
   reason: string;
 }
 
-export interface BoardSpecAdvice {
-  recommendedRecipe: string;
+export interface SteppedBoardRecommendation {
+  tier: 'closest' | 'balanced' | 'reserve';
+  tierLabel: string;
+  recipe: string;
+  boardGrade: 'single-wall' | 'double-wall';
+  fluteId: BctFluteId;
   topLayer: PaperGradeId;
   mediumLayer: MediumGradeId;
+  centerLayer: PaperGradeId;
+  mediumLayer2: MediumGradeId;
+  bottomLayer: PaperGradeId;
+  ectKgfCm: number;
+  bctKgf: number;
+  maxSafeStackLoadKgf: number;
+  achievedSafetyFactor: number;
+  burstKpa: number;
+  boardGsm: number;
+  gsmDeltaPct: number;
+  isCurrentSpec: boolean;
+  summaryNote: string;
+}
+
+export interface BoardSpecAdvice {
+  recommendedRecipe: string;
+  boardGrade?: 'single-wall' | 'double-wall';
+  topLayer: PaperGradeId;
+  mediumLayer: MediumGradeId;
+  centerLayer?: PaperGradeId;
+  mediumLayer2?: MediumGradeId;
   bottomLayer: PaperGradeId;
   fluteId: BctFluteId;
   burstKpa: number;
@@ -1211,6 +1237,7 @@ export interface BoardSpecAdvice {
   bctKgf: number;
   bctGainPct: number;
   reason: string;
+  candidates: SteppedBoardRecommendation[];
 }
 
 export interface PerfectionistTuningReport {
@@ -1356,5 +1383,473 @@ export interface AgentApiKeyInfo {
   updatedAt: string | null;
   skillVersion: string;
 }
+
+// ============================================================================
+// INDONESIAN VEHICLE & CONTAINER LOADING PARAMETERS
+// ============================================================================
+
+export type VehiclePresetId =
+  | '20ft-gp'
+  | '40ft-gp'
+  | '40ft-hc'
+  | '20ft-reefer'
+  | '40ft-hc-reefer'
+  | 'cde-box'
+  | 'cdd-box'
+  | 'cdd-long'
+  | 'fuso-box'
+  | 'tronton-box'
+  | 'tronton-wingbox'
+  | 'custom';
+
+export type VehicleCategory =
+  | 'container-dry'
+  | 'container-reefer'
+  | 'truck-box'
+  | 'truck-wingbox';
+
+export type VehicleLoadingAccess = 'rear' | 'side-wingbox';
+export type VehicleStackingMode = 'auto' | 'single' | 'double';
+export type VehicleLayoutPreference = 'auto' | 'lengthwise' | 'crosswise' | 'mixed';
+
+export interface VehiclePresetSpec {
+  id: Exclude<VehiclePresetId, 'custom'>;
+  name: string;
+  shortLabel: string;
+  category: VehicleCategory;
+  categoryLabel: string;
+  loadingAccess: VehicleLoadingAccess;
+  internalLengthMm: number;
+  internalWidthMm: number;
+  internalHeightMm: number;
+  doorWidthMm: number;
+  doorHeightMm: number;
+  reeferLoadLineMm: number | null;
+  maxPayloadKg: number;
+  defaultNonStandardTolMm: number;
+  defaultSideClearanceMm: number;
+  defaultPalletGapMm: number;
+  defaultRearDoorClearanceMm: number;
+  defaultForkliftLiftClearanceMm: number;
+  varianceNote: string;
+}
+
+export const INDONESIAN_VEHICLE_PRESETS: VehiclePresetSpec[] = [
+  {
+    id: '20ft-gp',
+    name: "Kontainer 20' GP (Standard Dry)",
+    shortLabel: "20' GP Dry",
+    category: 'container-dry',
+    categoryLabel: 'Kontainer Laut ISO',
+    loadingAccess: 'rear',
+    internalLengthMm: 5898,
+    internalWidthMm: 2350,
+    internalHeightMm: 2390,
+    doorWidthMm: 2340,
+    doorHeightMm: 2275,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 21700,
+    defaultNonStandardTolMm: 15,
+    defaultSideClearanceMm: 30,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 120,
+    varianceNote: 'Pintu ISO 2.275 mm lebih rendah dari plafon 2.390 mm; dinding baja bergelombang berpotensi meleset ±15 mm.',
+  },
+  {
+    id: '40ft-gp',
+    name: "Kontainer 40' GP (Standard Dry)",
+    shortLabel: "40' GP Dry",
+    category: 'container-dry',
+    categoryLabel: 'Kontainer Laut ISO',
+    loadingAccess: 'rear',
+    internalLengthMm: 12032,
+    internalWidthMm: 2350,
+    internalHeightMm: 2390,
+    doorWidthMm: 2340,
+    doorHeightMm: 2275,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 26700,
+    defaultNonStandardTolMm: 15,
+    defaultSideClearanceMm: 30,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 120,
+    varianceNote: 'Pintu 2.275 mm menjadi batas utama forklift; perhatikan limit tonase jalan raya Indonesia.',
+  },
+  {
+    id: '40ft-hc',
+    name: "Kontainer 40' High Cube (HC)",
+    shortLabel: "40' High Cube",
+    category: 'container-dry',
+    categoryLabel: 'Kontainer Laut ISO',
+    loadingAccess: 'rear',
+    internalLengthMm: 12032,
+    internalWidthMm: 2350,
+    internalHeightMm: 2695,
+    doorWidthMm: 2340,
+    doorHeightMm: 2578,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 26500,
+    defaultNonStandardTolMm: 15,
+    defaultSideClearanceMm: 30,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 120,
+    varianceNote: 'Paling umum untuk kargo bervolume besar di ekspor & antar-pulau; ideal untuk 2-tier palet pendek (<= 1.200 mm).',
+  },
+  {
+    id: '20ft-reefer',
+    name: "Kontainer 20' Reefer (Pendingin)",
+    shortLabel: "20' Reefer",
+    category: 'container-reefer',
+    categoryLabel: 'Kontainer Pendingin',
+    loadingAccess: 'rear',
+    internalLengthMm: 5440,
+    internalWidthMm: 2280,
+    internalHeightMm: 2250,
+    doorWidthMm: 2280,
+    doorHeightMm: 2210,
+    reeferLoadLineMm: 2160,
+    maxPayloadKg: 27200,
+    defaultNonStandardTolMm: 15,
+    defaultSideClearanceMm: 30,
+    defaultPalletGapMm: 20,
+    defaultRearDoorClearanceMm: 100,
+    defaultForkliftLiftClearanceMm: 110,
+    varianceNote: 'Tinggi wajib di bawah Red Load Line (2.160 mm) demi sirkulasi udara; lantai aluminium T-bar dibatasi beban gandar forklift 5.460 kg.',
+  },
+  {
+    id: '40ft-hc-reefer',
+    name: "Kontainer 40' HC Reefer (Pendingin)",
+    shortLabel: "40' HC Reefer",
+    category: 'container-reefer',
+    categoryLabel: 'Kontainer Pendingin',
+    loadingAccess: 'rear',
+    internalLengthMm: 11550,
+    internalWidthMm: 2280,
+    internalHeightMm: 2540,
+    doorWidthMm: 2280,
+    doorHeightMm: 2550,
+    reeferLoadLineMm: 2420,
+    maxPayloadKg: 29200,
+    defaultNonStandardTolMm: 15,
+    defaultSideClearanceMm: 30,
+    defaultPalletGapMm: 20,
+    defaultRearDoorClearanceMm: 100,
+    defaultForkliftLiftClearanceMm: 110,
+    varianceNote: 'Wajib menjaga jarak bawah Red Load Line (2.420 mm) dan ruang sirkulasi udara 100 mm di pintu belakang.',
+  },
+  {
+    id: 'cde-box',
+    name: 'Truk CDE Box (Engkel 4 Roda)',
+    shortLabel: 'CDE Box (4R)',
+    category: 'truck-box',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'rear',
+    internalLengthMm: 3000,
+    internalWidthMm: 1600,
+    internalHeightMm: 1600,
+    doorWidthMm: 1560,
+    doorHeightMm: 1540,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 2200,
+    defaultNonStandardTolMm: 30,
+    defaultSideClearanceMm: 35,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 100,
+    varianceNote: 'Dimensi karoseri lokal bervariasi ±50–100 mm antar pabrikan; sesuaikan angka aktual sebelum stuffing.',
+  },
+  {
+    id: 'cdd-box',
+    name: 'Truk CDD Box (Double 6 Roda)',
+    shortLabel: 'CDD Box (6R)',
+    category: 'truck-box',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'rear',
+    internalLengthMm: 4300,
+    internalWidthMm: 1980,
+    internalHeightMm: 1980,
+    doorWidthMm: 1940,
+    doorHeightMm: 1900,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 4500,
+    defaultNonStandardTolMm: 30,
+    defaultSideClearanceMm: 35,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 100,
+    varianceNote: 'Karoseri CDD standar di Indonesia berkisar lebar 1.900–2.050 mm; cek lebar pintu belakang sebelum muat.',
+  },
+  {
+    id: 'cdd-long',
+    name: 'Truk CDD Long Box (6 Roda Long)',
+    shortLabel: 'CDD Long Box',
+    category: 'truck-box',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'rear',
+    internalLengthMm: 5400,
+    internalWidthMm: 2100,
+    internalHeightMm: 2150,
+    doorWidthMm: 2050,
+    doorHeightMm: 2060,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 5500,
+    defaultNonStandardTolMm: 30,
+    defaultSideClearanceMm: 35,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 110,
+    varianceNote: 'Karoseri CDD Long bervariasi P 5.200–5.500 mm dan L 2.000–2.200 mm; perhatikan rasio berat terhadap tonase.',
+  },
+  {
+    id: 'fuso-box',
+    name: 'Truk Fuso Box (Medium 6 Roda)',
+    shortLabel: 'Fuso Box',
+    category: 'truck-box',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'rear',
+    internalLengthMm: 6500,
+    internalWidthMm: 2300,
+    internalHeightMm: 2300,
+    doorWidthMm: 2240,
+    doorHeightMm: 2200,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 8500,
+    defaultNonStandardTolMm: 30,
+    defaultSideClearanceMm: 35,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 120,
+    varianceNote: 'Karoseri Fuso lokal bervariasi P 6.000–7.000 mm & L 2.200–2.400 mm; cocok untuk distribusi palet antarkota.',
+  },
+  {
+    id: 'tronton-box',
+    name: 'Truk Tronton Box (10 Roda)',
+    shortLabel: 'Tronton Box',
+    category: 'truck-box',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'rear',
+    internalLengthMm: 9400,
+    internalWidthMm: 2350,
+    internalHeightMm: 2300,
+    doorWidthMm: 2280,
+    doorHeightMm: 2200,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 16000,
+    defaultNonStandardTolMm: 25,
+    defaultSideClearanceMm: 35,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 80,
+    defaultForkliftLiftClearanceMm: 120,
+    varianceNote: 'Muat dari pintu belakang (rear-loading); gunakan hand-pallet atau forklift free-lift mast.',
+  },
+  {
+    id: 'tronton-wingbox',
+    name: 'Tronton Wingbox (10 Roda Buka Samping)',
+    shortLabel: 'Tronton Wingbox',
+    category: 'truck-wingbox',
+    categoryLabel: 'Truk Domestik Indonesia',
+    loadingAccess: 'side-wingbox',
+    internalLengthMm: 9500,
+    internalWidthMm: 2400,
+    internalHeightMm: 2380,
+    doorWidthMm: 2400,
+    doorHeightMm: 2320,
+    reeferLoadLineMm: null,
+    maxPayloadKg: 18000,
+    defaultNonStandardTolMm: 20,
+    defaultSideClearanceMm: 25,
+    defaultPalletGapMm: 25,
+    defaultRearDoorClearanceMm: 60,
+    defaultForkliftLiftClearanceMm: 100,
+    varianceNote: 'Favorit distribusi palet FMCG Jawa–Sumatera; buka samping kiri-kanan memudahkan forklift side-loading dengan clearance lebih efisien.',
+  },
+];
+
+export type VehicleLoadingMode = 'palletized' | 'floor-loading';
+
+export interface PalletVehicleConfig {
+  enabled: boolean;
+  loadingMode?: VehicleLoadingMode;
+  floorWallClearanceMm?: number; // Per-side manual hand-stacking clearance for Floor Loading (mm)
+  presetId: VehiclePresetId;
+  name: string;
+  category: VehicleCategory;
+  loadingAccess: VehicleLoadingAccess;
+  internalLengthMm: number;
+  internalWidthMm: number;
+  internalHeightMm: number;
+  doorWidthMm: number;
+  doorHeightMm: number;
+  reeferLoadLineMm: number | null;
+  maxPayloadKg: number;
+  nonStandardToleranceMm: number; // Per-side wall/Karoseri safety buffer (mm)
+  sideWallClearanceMm: number; // Per-side forklift loading clearance (mm)
+  palletGapMm: number; // Clearance between adjacent pallets (mm)
+  rearDoorClearanceMm: number; // Margin at rear door for safe closing (mm)
+  forkliftLiftClearanceMm: number; // Vertical lift + safety clearance at door header (mm)
+  doubleStackGapMm: number; // Extra vertical lift gap needed when double-stacking 2nd tier (mm)
+  stackingMode: VehicleStackingMode;
+  layoutPreference: VehicleLayoutPreference;
+  autoSyncPalletHeight: boolean;
+}
+
+export const DEFAULT_VEHICLE_CONFIG: PalletVehicleConfig = {
+  enabled: false,
+  loadingMode: 'palletized',
+  floorWallClearanceMm: 15,
+  presetId: '40ft-hc',
+  name: "Kontainer 40' High Cube (HC)",
+  category: 'container-dry',
+  loadingAccess: 'rear',
+  internalLengthMm: 12032,
+  internalWidthMm: 2350,
+  internalHeightMm: 2695,
+  doorWidthMm: 2340,
+  doorHeightMm: 2578,
+  reeferLoadLineMm: null,
+  maxPayloadKg: 26500,
+  nonStandardToleranceMm: 15,
+  sideWallClearanceMm: 30,
+  palletGapMm: 25,
+  rearDoorClearanceMm: 80,
+  forkliftLiftClearanceMm: 120,
+  doubleStackGapMm: 50,
+  stackingMode: 'auto',
+  layoutPreference: 'auto',
+  autoSyncPalletHeight: true,
+};
+
+export interface VehiclePalletPlacement {
+  index: number; // 1-indexed floor/stack sequence
+  x: number; // Center X from front bulkhead (mm), 0..internalLengthMm
+  z: number; // Center Z from vehicle centerline (mm), -internalWidthMm/2..+internalWidthMm/2
+  sizeX: number; // Footprint along vehicle length (mm)
+  sizeZ: number; // Footprint along vehicle width (mm)
+  rotated90: boolean;
+  tier: 1 | 2;
+}
+
+export interface VehicleAuditWarning {
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  detail: string;
+}
+
+export interface VehicleHeightSyncResult {
+  targetMaxStackHeightMm: number;
+  chosenTiers: 1 | 2;
+  effectiveClearHeightMm: number;
+  singleTierMaxHeightMm: number;
+  doubleTierMaxHeightMm: number;
+  singleLayersPerPallet: number;
+  doubleLayersPerPallet: number;
+  bottleneck: 'door-header' | 'internal-roof' | 'reefer-load-line';
+  summaryText: string;
+}
+
+export interface VehicleLoadingEvaluation {
+  vehicleName: string;
+  layoutUsed: 'lengthwise' | 'crosswise' | 'mixed';
+  layoutLabel: string;
+  activeTiers: 1 | 2;
+  floorPalletCount: number;
+  spaceMaxPallets: number;
+  weightMaxPallets: number;
+  totalPallets: number;
+  limitedByWeight: boolean;
+  totalCases: number;
+  totalUnits: number;
+  totalGrossWeightKg: number;
+  totalNetCargoKg: number;
+  weightUtilizationPct: number;
+  floorUtilizationPct: number;
+  volumeUtilizationPct: number;
+  effectiveLengthMm: number;
+  effectiveWidthMm: number;
+  effectiveClearHeightMm: number;
+  heightBottleneck: 'door-header' | 'internal-roof' | 'reefer-load-line';
+  actualSideClearancePerSideMm: number;
+  actualRearDoorClearanceMm: number;
+  actualVerticalDoorClearanceMm: number;
+  actualVerticalRoofClearanceMm: number;
+  usedLengthMm: number;
+  usedWidthMm: number;
+  totalStackHeightInVehicleMm: number;
+  fitsHeight: boolean;
+  fitsDoorWidth: boolean;
+  doubleStackBottomLoadKgf: number | null;
+  doubleStackSafetyFactor: number | null;
+  doubleStackBctStatus: 'n/a' | 'safe' | 'marginal' | 'overload';
+  overallStatus: 'optimal' | 'warning' | 'critical';
+  placements: VehiclePalletPlacement[];
+  warnings: VehicleAuditWarning[];
+}
+
+export interface FloorLoadingSlot {
+  x: number; // Center X from front bulkhead (mm)
+  z: number; // Center Z from vehicle centerline (mm)
+  sizeX: number; // Along vehicle length (mm)
+  sizeZ: number; // Along vehicle width (mm)
+  rotated90: boolean;
+}
+
+export interface FloorLoadingEvaluation {
+  vehicleName: string;
+  layoutUsed: 'lengthwise' | 'crosswise' | 'mixed';
+  layoutLabel: string;
+  casesPerLayer: number;
+  maxLayersByHeight: number;
+  maxSafeLayersByBct: number;
+  layersLoaded: number;
+  spaceMaxCases: number;
+  weightMaxCases: number;
+  totalCases: number;
+  totalUnits: number;
+  limitedByWeight: boolean;
+  totalGrossWeightKg: number;
+  cargoVolumeCbm: number;
+  vehicleVolumeCbm: number;
+  weightUtilizationPct: number;
+  floorUtilizationPct: number;
+  volumeUtilizationPct: number;
+  effectiveLengthMm: number;
+  effectiveWidthMm: number;
+  effectiveClearHeightMm: number;
+  heightBottleneck: 'door-header' | 'internal-roof' | 'reefer-load-line';
+  stackHeightMm: number;
+  usedLengthMm: number;
+  usedWidthMm: number;
+  actualSideVoidPerSideMm: number;
+  actualRearVoidMm: number;
+  actualVerticalRoofClearanceMm: number;
+  needsDunnageAirbag: boolean;
+  bottomLayerLoadKgf: number;
+  bottomLayerSafetyFactor: number;
+  bctStatus: 'safe' | 'marginal' | 'overload';
+  estimatedHandLoadMinutes: number;
+  overallStatus: 'optimal' | 'warning' | 'critical';
+  floorSlots: FloorLoadingSlot[];
+  warnings: VehicleAuditWarning[];
+}
+
+export interface VehiclePalletVsFloorComparison {
+  palletCases: number;
+  floorCases: number;
+  deltaCases: number;
+  deltaCasesPct: number;
+  palletVolumePct: number;
+  floorVolumePct: number;
+  deltaVolumePct: number;
+  palletLoadMinutesEst: number;
+  floorLoadMinutesEst: number;
+  palletBctSafe: boolean;
+  floorBctSafe: boolean;
+  recommendationNote: string;
+}
+
+
 
 

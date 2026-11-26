@@ -6,11 +6,15 @@ import {
   DielinePaths,
   EngineeringAnalysis,
   FLUTE_SPECS,
+  FloorLoadingEvaluation,
   PALLET_PRESETS,
   PalletBoxPlacement,
   PalletConfig,
   PalletInternalGap,
   PalletPatternEvaluation,
+  PalletVehicleConfig,
+  VehicleLoadingEvaluation,
+  VehiclePalletVsFloorComparison,
 } from '../types';
 import { formatSubstanceString } from './engineering';
 import { computeEffectivePalletDims } from './palletizer';
@@ -54,6 +58,10 @@ export interface PalletizerPdfReportInput {
   syncedCaseGrossKg: number;
   activeEvaluation: PalletPatternEvaluation;
   captures: PalletizerPdfCaptureSet;
+  vehicle?: PalletVehicleConfig;
+  vehicleEvaluation?: VehicleLoadingEvaluation | null;
+  floorEvaluation?: FloorLoadingEvaluation | null;
+  palletVsFloorComparison?: VehiclePalletVsFloorComparison | null;
   generatedBy?: string;
 }
 
@@ -824,7 +832,14 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
     activeEvaluation,
     captures,
     generatedBy,
+    vehicle,
+    vehicleEvaluation,
+    floorEvaluation,
+    palletVsFloorComparison,
   } = input;
+
+  const hasVehiclePage = Boolean(vehicle?.enabled && vehicleEvaluation);
+  const totalPages = hasVehiclePage ? 3 : 2;
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -1278,7 +1293,7 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
   doc.setFontSize(6.1);
   setText(doc, C_INK_MUTED);
   doc.text('Dibuat oleh aplikasi DieCut.Room · Totale.Room Engineering Suite', M, 290);
-  doc.text('Halaman 1 / 2', pageW - M, 290, { align: 'right' });
+  doc.text(`Halaman 1 / ${totalPages}`, pageW - M, 290, { align: 'right' });
 
   // ============================================================================
   // PAGE 2: 4 POV ORTHOGRAPHIC NORMAL RENDERS + PANEL KHUSUS HEAT-MAP ISO & TOP
@@ -1646,7 +1661,641 @@ export async function exportPalletizerReportPdf(input: PalletizerPdfReportInput)
   doc.setFontSize(6.1);
   setText(doc, C_INK_MUTED);
   doc.text('Dibuat oleh aplikasi DieCut.Room · Totale.Room Engineering Suite', M, 290);
-  doc.text('Halaman 2 / 2', pageW - M, 290, { align: 'right' });
+  doc.text(`Halaman 2 / ${totalPages}`, pageW - M, 290, { align: 'right' });
+
+  // ============================================================================
+  // PAGE 3 (OPTIONAL): RENCANA MUAT ARMADA / KONTAINER (PALET / FLOOR LOADING)
+  // ============================================================================
+  if (hasVehiclePage && vehicle && vehicleEvaluation) {
+    doc.addPage('a4', 'portrait');
+    const isFloorPdf = (vehicle.loadingMode ?? 'palletized') === 'floor-loading' && Boolean(floorEvaluation);
+    const activeOverall = isFloorPdf && floorEvaluation ? floorEvaluation.overallStatus : vehicleEvaluation.overallStatus;
+
+    const vStatusLabel =
+      activeOverall === 'optimal'
+        ? 'MUAT OPTIMAL'
+        : activeOverall === 'warning'
+        ? 'PERLU PERHATIAN'
+        : 'RISIKO / OVERLOAD';
+    const vStatusBg =
+      activeOverall === 'optimal' ? C_GREEN : activeOverall === 'warning' ? C_AMBER : C_RED;
+
+    drawTactileReportHeader(doc, {
+      x: M,
+      y: 8,
+      w: contentW,
+      h: 17,
+      eyebrow: isFloorPdf
+        ? 'DIBUAT OLEH APLIKASI DIECUT.ROOM  |  RENCANA MUAT FLOOR LOADING (TANPA PALET)'
+        : 'DIBUAT OLEH APLIKASI DIECUT.ROOM  |  RENCANA MUAT ARMADA & KONTAINER',
+      title: `Simulasi ${isFloorPdf ? 'Floor Loading' : 'Muat Palet'} ${vehicle.name}`,
+      subtitle:
+        isFloorPdf && floorEvaluation
+          ? `${projectTrimmed ? `Proyek: ${projectTrimmed}  |  ` : ''}Pola ${floorEvaluation.layoutLabel}  |  ${floorEvaluation.casesPerLayer}x${floorEvaluation.layersLoaded} lyr  |  ${floorEvaluation.totalCases.toLocaleString('id-ID')} dus`
+          : `${projectTrimmed ? `Proyek: ${projectTrimmed}  |  ` : ''}Pola ${vehicleEvaluation.layoutLabel}  |  ${vehicleEvaluation.totalPallets} palet (${vehicleEvaluation.activeTiers} tier)  |  ${vehicleEvaluation.totalCases.toLocaleString('id-ID')} dus`,
+      statusLabel: vStatusLabel,
+      statusBg: vStatusBg,
+      rightMeta: `Dalam ${vehicle.internalLengthMm}x${vehicle.internalWidthMm}x${vehicle.internalHeightMm} mm`,
+      logoPng,
+    });
+
+    // 4 KPI Summary Cards (y = 27.5..46.5)
+    const vKpiY = 27.5;
+    const vKpiH = 19;
+    const vKpiGap = 2.8;
+    const vKpiW = (contentW - vKpiGap * 3) / 4;
+    const vKpis =
+      isFloorPdf && floorEvaluation
+        ? [
+            {
+              title: 'TOTAL KARTON FLOOR LOAD',
+              main: `${floorEvaluation.totalCases.toLocaleString('id-ID')} dus`,
+              sub: `${floorEvaluation.totalUnits.toLocaleString('id-ID')} pcs · Est ~${floorEvaluation.estimatedHandLoadMinutes} mnt`,
+              accent: C_INK_DARK,
+            },
+            {
+              title: 'SUSUNAN LANTAI & LAYER',
+              main: `${floorEvaluation.casesPerLayer} x ${floorEvaluation.layersLoaded} lyr`,
+              sub: `Tinggi ${floorEvaluation.stackHeightMm} mm · BCT aman <=${floorEvaluation.maxSafeLayersByBct} lyr`,
+              accent: C_ACCENT,
+            },
+            {
+              title: 'UTILISASI KUBIK (CBM)',
+              main: `${floorEvaluation.volumeUtilizationPct}% vol`,
+              sub: `${floorEvaluation.cargoVolumeCbm}/${floorEvaluation.vehicleVolumeCbm} CBM · Lantai ${floorEvaluation.floorUtilizationPct}%`,
+              accent: floorEvaluation.volumeUtilizationPct >= 75 ? C_GREEN : C_AMBER,
+            },
+            {
+              title: 'BCT DASAR & PAYLOAD',
+              main: `SF ${floorEvaluation.bottomLayerSafetyFactor}:1`,
+              sub: `${(floorEvaluation.totalGrossWeightKg / 1000).toFixed(2)}/${(vehicle.maxPayloadKg / 1000).toFixed(1)}t (${floorEvaluation.weightUtilizationPct}%)`,
+              accent:
+                floorEvaluation.bctStatus === 'overload'
+                  ? C_RED
+                  : floorEvaluation.bctStatus === 'marginal'
+                  ? C_AMBER
+                  : C_GREEN,
+            },
+          ]
+        : [
+            {
+              title: 'TOTAL MUATAN PALET',
+              main: `${vehicleEvaluation.totalPallets} palet`,
+              sub: `${vehicleEvaluation.floorPalletCount} lantai x ${vehicleEvaluation.activeTiers} tier${
+                vehicleEvaluation.limitedByWeight ? ' (limit berat)' : ''
+              }`,
+              accent: C_INK_DARK,
+            },
+            {
+              title: 'TOTAL MASTER DUS & UNIT',
+              main: `${vehicleEvaluation.totalCases.toLocaleString('id-ID')} dus`,
+              sub: `${vehicleEvaluation.totalUnits.toLocaleString('id-ID')} pcs (${activeEvaluation.totalCases}/palet)`,
+              accent: C_ACCENT,
+            },
+            {
+              title: 'UTILISASI VOLUME & LANTAI',
+              main: `${vehicleEvaluation.volumeUtilizationPct}% vol`,
+              sub: `Lantai ${vehicleEvaluation.floorUtilizationPct}% · ${(
+                (vehicle.internalLengthMm * vehicle.internalWidthMm * vehicle.internalHeightMm) /
+                1e9
+              ).toFixed(1)} CBM`,
+              accent: vehicleEvaluation.volumeUtilizationPct >= 65 ? C_GREEN : C_AMBER,
+            },
+            {
+              title: 'BOBOT VS PAYLOAD',
+              main: `${(vehicleEvaluation.totalGrossWeightKg / 1000).toFixed(2)} / ${(
+                vehicle.maxPayloadKg / 1000
+              ).toFixed(1)} t`,
+              sub: `${vehicleEvaluation.weightUtilizationPct}% · Netto ${vehicleEvaluation.totalNetCargoKg.toLocaleString('id-ID')} kg`,
+              accent:
+                vehicleEvaluation.weightUtilizationPct > 100
+                  ? C_RED
+                  : vehicleEvaluation.weightUtilizationPct > 90
+                  ? C_AMBER
+                  : C_GREEN,
+            },
+          ];
+
+    vKpis.forEach((k, i) => {
+      const kx = M + i * (vKpiW + vKpiGap);
+      setFill(doc, { r: 255, g: 255, b: 255 });
+      setStroke(doc, C_LINE);
+      doc.setLineWidth(0.25);
+      doc.roundedRect(kx, vKpiY, vKpiW, vKpiH, 1.2, 1.2, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.6);
+      setText(doc, C_INK_MUTED);
+      doc.text(k.title, kx + 2.4, vKpiY + 4.3);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.2);
+      setText(doc, k.accent);
+      doc.text(truncateToFit(doc, k.main, vKpiW - 4.8), kx + 2.4, vKpiY + 11.4);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.7);
+      setText(doc, C_INK_BODY);
+      doc.text(truncateToFit(doc, k.sub, vKpiW - 4.8), kx + 2.4, vKpiY + 16.3);
+    });
+
+    // Two Spec KV Cards (y = 49..93)
+    const vSpecY = 49;
+    const vSpecH = 44;
+    drawKvCard(doc, M, vSpecY, colW, vSpecH, 'SPESIFIKASI ARMADA & TOLERANSI KAROSERI', [
+      {
+        label: 'Armada & Akses Muat',
+        value: `${vehicle.name} (${vehicle.loadingAccess === 'side-wingbox' ? 'Buka Samping' : 'Pintu Belakang'})`,
+        bold: true,
+      },
+      {
+        label: 'Dimensi Dalam (P x L x T)',
+        value: `${vehicle.internalLengthMm} x ${vehicle.internalWidthMm} x ${vehicle.internalHeightMm} mm`,
+        bold: true,
+      },
+      {
+        label: 'Bukaan Pintu (L x T)',
+        value: `${vehicle.doorWidthMm} x ${vehicle.doorHeightMm} mm`,
+      },
+      {
+        label: 'Batas Ketinggian Efektif',
+        value: vehicle.reeferLoadLineMm
+          ? `Red Load Line ${vehicle.reeferLoadLineMm} mm (Reefer)`
+          : isFloorPdf && floorEvaluation
+          ? `${floorEvaluation.effectiveClearHeightMm} mm (Floor-Stack Tanpa Palet)`
+          : `${vehicleEvaluation.effectiveClearHeightMm} mm (Pintu - Garpu ${vehicle.forkliftLiftClearanceMm} mm)`,
+        valueColor: isFloorPdf ? C_GREEN : vehicleEvaluation.fitsHeight ? C_GREEN : C_RED,
+      },
+      {
+        label: 'Toleransi Ketidakstandaran',
+        value: `+/- ${vehicle.nonStandardToleranceMm} mm/sisi (Karoseri/Dinding)`,
+      },
+      {
+        label: 'Banding Palet vs Floor',
+        value: palletVsFloorComparison
+          ? `Palet ${palletVsFloorComparison.palletCases} vs Floor ${palletVsFloorComparison.floorCases} dus (${palletVsFloorComparison.deltaCasesPct >= 0 ? '+' : ''}${palletVsFloorComparison.deltaCasesPct}%)`
+          : `${vehicle.maxPayloadKg.toLocaleString('id-ID')} kg maks payload`,
+        valueColor:
+          palletVsFloorComparison && palletVsFloorComparison.deltaCases > 0 ? C_GREEN : C_INK_DARK,
+      },
+    ]);
+
+    if (isFloorPdf && floorEvaluation) {
+      drawKvCard(doc, M + colW + colGap, vSpecY, colW, vSpecH, 'PARAMETER FLOOR LOADING & AUDIT BCT', [
+        {
+          label: 'Metode & Pola Lantai',
+          value: `Floor Loading (Loose) · ${floorEvaluation.layoutLabel}`,
+          bold: true,
+        },
+        {
+          label: 'Susunan & Tinggi Total',
+          value: `${floorEvaluation.casesPerLayer} dus/lyr x ${floorEvaluation.layersLoaded} lyr (${floorEvaluation.stackHeightMm} mm)`,
+        },
+        {
+          label: 'Sisa Sisi Dinding & Belakang',
+          value: `Sisi +/-${floorEvaluation.actualSideVoidPerSideMm} mm | Belakang ${floorEvaluation.actualRearVoidMm} mm`,
+          valueColor: floorEvaluation.needsDunnageAirbag ? C_AMBER : C_GREEN,
+        },
+        {
+          label: 'Beban & BCT Lapisan Dasar',
+          value: `${floorEvaluation.bottomLayerLoadKgf} kgf · SF ${floorEvaluation.bottomLayerSafetyFactor}:1 (Aman <=${floorEvaluation.maxSafeLayersByBct} lyr)`,
+          valueColor:
+            floorEvaluation.bctStatus === 'overload'
+              ? C_RED
+              : floorEvaluation.bctStatus === 'marginal'
+              ? C_AMBER
+              : C_GREEN,
+        },
+        {
+          label: 'Kebutuhan Dunnage / Airbag',
+          value: floorEvaluation.needsDunnageAirbag
+            ? 'Disarankan Airbag / Lashing Net'
+            : 'Susunan rapat (tanpa rongga besar)',
+        },
+        {
+          label: 'Estimasi Waktu Muat Manual',
+          value: `~${floorEvaluation.estimatedHandLoadMinutes} menit (kru 2 orang)`,
+        },
+      ]);
+    } else {
+      drawKvCard(doc, M + colW + colGap, vSpecY, colW, vSpecH, 'CLEARANCE FORKLIFT & SINKRONISASI PALET', [
+        {
+          label: 'Pola Susunan & Tingkat',
+          value: `${vehicleEvaluation.layoutLabel} · ${vehicleEvaluation.activeTiers} Tier`,
+          bold: true,
+        },
+        {
+          label: 'Tinggi 1 Palet / Total',
+          value: `${activeEvaluation.totalStackHeightMm} mm (${activeEvaluation.layerCount} lyr) / Total ${vehicleEvaluation.totalStackHeightInVehicleMm} mm`,
+        },
+        {
+          label: 'Clearance Dinding Samping',
+          value: `Aktual +/-${vehicleEvaluation.actualSideClearancePerSideMm} mm/sisi (Min ${vehicle.sideWallClearanceMm} mm)`,
+          valueColor: vehicleEvaluation.actualSideClearancePerSideMm < 25 ? C_AMBER : C_GREEN,
+        },
+        {
+          label: 'Celah Antar-Palet',
+          value: `${vehicle.palletGapMm} mm (manuver garpu)`,
+        },
+        {
+          label: 'Margin Pintu Belakang',
+          value: `Aktual ${vehicleEvaluation.actualRearDoorClearanceMm} mm (Min ${vehicle.rearDoorClearanceMm} mm)`,
+        },
+        {
+          label: 'Celah Vertikal Pintu / BCT 2T',
+          value:
+            vehicleEvaluation.activeTiers === 2
+              ? `Pintu ${vehicleEvaluation.actualVerticalDoorClearanceMm} mm · BCT 2T SF ${vehicleEvaluation.doubleStackSafetyFactor ?? '-'}:1`
+              : `Pintu ${vehicleEvaluation.actualVerticalDoorClearanceMm} mm · Plafon ${vehicleEvaluation.actualVerticalRoofClearanceMm} mm`,
+          valueColor:
+            vehicleEvaluation.doubleStackBctStatus === 'overload' || !vehicleEvaluation.fitsHeight
+              ? C_RED
+              : vehicleEvaluation.doubleStackBctStatus === 'marginal'
+              ? C_AMBER
+              : C_GREEN,
+        },
+      ]);
+    }
+
+    // CARD 1: 2D TOP VIEW VECTOR PLAN (y = 95.5..164.5)
+    const tvY = 95.5;
+    const tvH = 69;
+    setFill(doc, { r: 255, g: 255, b: 255 });
+    setStroke(doc, C_LINE);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(M, tvY, contentW, tvH, 1.2, 1.2, 'FD');
+
+    setFill(doc, C_HEADER_TINT);
+    doc.rect(M + 0.15, tvY + 0.15, contentW - 0.3, 5.4, 'F');
+    doc.line(M, tvY + 5.4, M + contentW, tvY + 5.4);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.9);
+    setText(doc, C_INK_DARK);
+    doc.text(
+      isFloorPdf
+        ? 'DENAH 2D TOP VIEW (SUSUNAN KARTON FLOOR LOADING & ZONA DUNNAGE)'
+        : 'DENAH 2D TOP VIEW (TAMPAK ATAS RUANG MUAT & CLEARANCE SAMPING)',
+      M + 2.4,
+      tvY + 3.8
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.9);
+    setText(doc, C_INK_MUTED);
+    doc.text(
+      isFloorPdf && floorEvaluation
+        ? `Sisi +/-${floorEvaluation.actualSideVoidPerSideMm} mm | Blkg ${floorEvaluation.actualRearVoidMm} mm | ${floorEvaluation.casesPerLayer} dus/lyr`
+        : `Sisi +/-${vehicleEvaluation.actualSideClearancePerSideMm} mm | Celah Palet ${vehicle.palletGapMm} mm | Pintu Blkg ${vehicleEvaluation.actualRearDoorClearanceMm} mm`,
+      M + contentW - 2.4,
+      tvY + 3.8,
+      { align: 'right' }
+    );
+
+    const vL = Math.max(1000, vehicle.internalLengthMm);
+    const vW = Math.max(1000, vehicle.internalWidthMm);
+    const vH = Math.max(1000, vehicle.internalHeightMm);
+    const doorH = Math.min(vH, Math.max(800, vehicle.doorHeightMm));
+
+    const tvDrawX = M + 15;
+    const tvDrawY = tvY + 12.5;
+    const tvDrawW = contentW - 30;
+    const tvDrawH = tvH - 22.5;
+    const tvScale = Math.min(tvDrawW / vL, tvDrawH / vW);
+    const tvBoxW = vL * tvScale;
+    const tvBoxH = vW * tvScale;
+    const tvOx = tvDrawX + (tvDrawW - tvBoxW) / 2;
+    const tvOy = tvDrawY + (tvDrawH - tvBoxH) / 2;
+    const toTvX = (mmX: number) => tvOx + mmX * tvScale;
+    const toTvY = (mmZ: number) => tvOy + (mmZ + vW / 2) * tvScale;
+
+    setFill(doc, C_SURFACE);
+    setStroke(doc, C_INK_DARK);
+    doc.setLineWidth(0.45);
+    doc.rect(tvOx, tvOy, tvBoxW, tvBoxH, 'FD');
+
+    const pdfEffW = isFloorPdf && floorEvaluation ? floorEvaluation.effectiveWidthMm : vehicleEvaluation.effectiveWidthMm;
+    const pdfEffL = isFloorPdf && floorEvaluation ? floorEvaluation.effectiveLengthMm : vehicleEvaluation.effectiveLengthMm;
+    setStroke(doc, C_ACCENT);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.0, 0.8], 0);
+    doc.rect(
+      toTvX(vehicle.nonStandardToleranceMm),
+      toTvY(-pdfEffW / 2),
+      pdfEffL * tvScale,
+      pdfEffW * tvScale,
+      'S'
+    );
+    doc.setLineDashPattern([], 0);
+
+    if (vehicle.loadingAccess === 'rear') {
+      setStroke(doc, C_ORANGE);
+      doc.setLineWidth(0.9);
+      doc.line(
+        tvOx + tvBoxW,
+        toTvY(-vehicle.doorWidthMm / 2),
+        tvOx + tvBoxW,
+        toTvY(vehicle.doorWidthMm / 2)
+      );
+    } else {
+      setStroke(doc, C_ACCENT);
+      doc.setLineWidth(0.7);
+      doc.setLineDashPattern([1.4, 1.0], 0);
+      doc.line(tvOx + 1, tvOy, tvOx + tvBoxW - 1, tvOy);
+      doc.line(tvOx + 1, tvOy + tvBoxH, tvOx + tvBoxW - 1, tvOy + tvBoxH);
+      doc.setLineDashPattern([], 0);
+    }
+
+    if (isFloorPdf && floorEvaluation) {
+      floorEvaluation.floorSlots.forEach((slot) => {
+        const sx = toTvX(slot.x - slot.sizeX / 2);
+        const sy = toTvY(slot.z - slot.sizeZ / 2);
+        const sw = Math.max(0.4, slot.sizeX * tvScale);
+        const sh = Math.max(0.4, slot.sizeZ * tvScale);
+        setFill(doc, slot.rotated90 ? C_ORIENT_90_FILL : C_ORIENT_0_FILL);
+        setStroke(doc, C_INK_DARK);
+        doc.setLineWidth(floorEvaluation.floorSlots.length > 180 ? 0.1 : 0.16);
+        doc.rect(sx, sy, sw, sh, 'FD');
+      });
+    } else {
+      const pdfFloorPallets = vehicleEvaluation.placements.filter((p) => p.tier === 1);
+      pdfFloorPallets.forEach((p) => {
+        const px = toTvX(p.x - p.sizeX / 2);
+        const py = toTvY(p.z - p.sizeZ / 2);
+        const pw = p.sizeX * tvScale;
+        const ph = p.sizeZ * tvScale;
+        const hasT2 = vehicleEvaluation.placements.some(
+          (o) => o.tier === 2 && Math.abs(o.x - p.x) < 5 && Math.abs(o.z - p.z) < 5
+        );
+        setFill(doc, p.rotated90 ? C_ORIENT_90_FILL : C_ORIENT_0_FILL);
+        setStroke(doc, C_INK_DARK);
+        doc.setLineWidth(0.26);
+        doc.roundedRect(px, py, pw, ph, 0.35, 0.35, 'FD');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(Math.max(4.4, Math.min(6.2, Math.min(pw, ph) * 0.42)));
+        setText(doc, C_INK_DARK);
+        doc.text(`#${p.index}${hasT2 ? 'x2' : ''}`, px + pw / 2, py + ph / 2 + 0.7, {
+          align: 'center',
+        });
+      });
+    }
+
+    drawDimensionLineHorizontal(
+      doc,
+      tvOx,
+      tvOx + tvBoxW,
+      tvOy - 3.6,
+      tvOy,
+      `Panjang Dalam ${vL} mm (Terpakai ${Math.round(isFloorPdf && floorEvaluation ? floorEvaluation.usedLengthMm : vehicleEvaluation.usedLengthMm)} mm)`,
+      C_INK_DARK
+    );
+    drawDimensionLineVertical(
+      doc,
+      tvOy,
+      tvOy + tvBoxH,
+      tvOx - 4.2,
+      tvOx,
+      `L ${vW} mm`,
+      C_INK_DARK
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.6);
+    setText(doc, C_INK_MUTED);
+    doc.text('DEPAN', tvOx - 1.5, tvOy + tvBoxH + 4.2, { align: 'right' });
+    doc.text(
+      vehicle.loadingAccess === 'rear' ? 'PINTU BELAKANG' : 'BELAKANG (WINGBOX)',
+      tvOx + tvBoxW + 1.5,
+      tvOy + tvBoxH + 4.2,
+      { align: 'left' }
+    );
+    doc.text(
+      `Kuning = 0 deg | Biru = 90 deg | Garis putus ungu = Zona Efektif (${Math.round(pdfEffL)}x${Math.round(pdfEffW)} mm)`,
+      M + contentW / 2,
+      tvY + tvH - 2.3,
+      { align: 'center' }
+    );
+
+    // CARD 2: 2D SIDE VIEW VECTOR PLAN (y = 167..234)
+    const svY = 167;
+    const svH = 67;
+    setFill(doc, { r: 255, g: 255, b: 255 });
+    setStroke(doc, C_LINE);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(M, svY, contentW, svH, 1.2, 1.2, 'FD');
+
+    setFill(doc, C_HEADER_TINT);
+    doc.rect(M + 0.15, svY + 0.15, contentW - 0.3, 5.4, 'F');
+    doc.line(M, svY + 5.4, M + contentW, svY + 5.4);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.9);
+    setText(doc, C_INK_DARK);
+    doc.text(
+      isFloorPdf
+        ? 'DENAH 2D SIDE VIEW (TUMPUKAN KARTON FLOOR LOADING & BATAS PLAFON)'
+        : 'DENAH 2D SIDE VIEW (TAMPAK SAMPING, AMBANG PINTU & RUANG ANGKAT GARPU)',
+      M + 2.4,
+      svY + 3.8
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.9);
+    setText(doc, C_INK_MUTED);
+    doc.text(
+      isFloorPdf && floorEvaluation
+        ? `Tinggi ${floorEvaluation.stackHeightMm} mm (${floorEvaluation.layersLoaded} lyr) | Plafon ${floorEvaluation.actualVerticalRoofClearanceMm} mm`
+        : `Tinggi Palet ${vehicleEvaluation.totalStackHeightInVehicleMm} mm | Celah Pintu ${vehicleEvaluation.actualVerticalDoorClearanceMm} mm | Plafon ${vehicleEvaluation.actualVerticalRoofClearanceMm} mm`,
+      M + contentW - 2.4,
+      svY + 3.8,
+      { align: 'right' }
+    );
+
+    const svDrawX = M + 15;
+    const svDrawY = svY + 10.5;
+    const svDrawW = contentW - 34;
+    const svDrawH = svH - 18.5;
+    const svScale = Math.min(svDrawW / vL, svDrawH / vH);
+    const svBoxW = vL * svScale;
+    const svBoxH = vH * svScale;
+    const svOx = svDrawX + (svDrawW - svBoxW) / 2;
+    const svFloorY = svDrawY + svBoxH + (svDrawH - svBoxH) / 2;
+    const toSvX = (mmX: number) => svOx + mmX * svScale;
+    const toSvY = (mmY: number) => svFloorY - mmY * svScale;
+
+    setFill(doc, C_SURFACE);
+    setStroke(doc, C_INK_DARK);
+    doc.setLineWidth(0.45);
+    doc.rect(svOx, toSvY(vH), svBoxW, svBoxH, 'FD');
+
+    if (doorH < vH) {
+      setFill(doc, C_ORANGE);
+      doc.rect(svOx + svBoxW - 2.2, toSvY(vH), 2.2, (vH - doorH) * svScale, 'F');
+      setStroke(doc, C_ORANGE);
+      doc.setLineWidth(0.24);
+      doc.setLineDashPattern([1.2, 0.9], 0);
+      doc.line(svOx, toSvY(doorH), svOx + svBoxW, toSvY(doorH));
+      doc.setLineDashPattern([], 0);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.4);
+      setText(doc, C_ORANGE);
+      doc.text(`Pintu ${doorH}mm`, svOx + svBoxW + 1.8, toSvY(doorH) + 1.0);
+    }
+
+    if (vehicle.reeferLoadLineMm && vehicle.reeferLoadLineMm > 0) {
+      setStroke(doc, C_RED);
+      doc.setLineWidth(0.32);
+      doc.setLineDashPattern([1.0, 0.8], 0);
+      doc.line(svOx, toSvY(vehicle.reeferLoadLineMm), svOx + svBoxW, toSvY(vehicle.reeferLoadLineMm));
+      doc.setLineDashPattern([], 0);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.2);
+      setText(doc, C_RED);
+      doc.text(`RED LOAD LINE ${vehicle.reeferLoadLineMm}mm`, svOx + 2, toSvY(vehicle.reeferLoadLineMm) - 1.0);
+    }
+
+    if (isFloorPdf && floorEvaluation) {
+      const pdfFloorCols = new Map<string, { x: number; sizeX: number; rotated90: boolean }>();
+      for (const s of floorEvaluation.floorSlots) {
+        const key = `${Math.round(s.x / 10)}-${Math.round(s.sizeX / 10)}`;
+        if (!pdfFloorCols.has(key)) pdfFloorCols.set(key, { x: s.x, sizeX: s.sizeX, rotated90: s.rotated90 });
+      }
+      const totalH = Math.max(1.2, floorEvaluation.stackHeightMm * svScale);
+      const topY = toSvY(floorEvaluation.stackHeightMm);
+      const lyrCount = Math.max(1, floorEvaluation.layersLoaded);
+      for (const col of pdfFloorCols.values()) {
+        const cx = toSvX(col.x - col.sizeX / 2);
+        const cw = Math.max(0.5, col.sizeX * svScale);
+        setFill(doc, col.rotated90 ? C_ORIENT_90_FILL : C_ORIENT_0_FILL);
+        setStroke(doc, C_INK_DARK);
+        doc.setLineWidth(0.14);
+        doc.rect(cx, topY, cw, totalH, 'FD');
+        setStroke(doc, C_INK_MUTED);
+        doc.setLineWidth(0.08);
+        for (let li = 1; li < lyrCount; li++) {
+          const ly = topY + (totalH * li) / lyrCount;
+          doc.line(cx, ly, cx + cw, ly);
+        }
+      }
+    } else {
+      const pdfSideCols = new Map<string, { x: number; sizeX: number; hasT2: boolean }>();
+      for (const p of vehicleEvaluation.placements) {
+        const key = `${Math.round(p.x / 20)}-${Math.round(p.sizeX / 20)}`;
+        const ex = pdfSideCols.get(key);
+        if (!ex) pdfSideCols.set(key, { x: p.x, sizeX: p.sizeX, hasT2: p.tier === 2 });
+        else if (p.tier === 2) ex.hasT2 = true;
+      }
+
+      const drawPdfSideTier = (cx: number, cw: number, baseMm: number, tierNum: 1 | 2) => {
+        const deckH = pallet.palletHeightMm * svScale;
+        const cargoH = Math.max(
+          1.2,
+          (activeEvaluation.totalStackHeightMm - pallet.palletHeightMm) * svScale
+        );
+        setFill(doc, { r: 214, g: 181, b: 136 });
+        setStroke(doc, C_INK_DARK);
+        doc.setLineWidth(0.2);
+        doc.rect(cx, toSvY(baseMm + pallet.palletHeightMm), cw, deckH, 'FD');
+
+        setFill(doc, tierNum === 1 ? { r: 226, g: 232, b: 240 } : C_ORIENT_90_FILL);
+        doc.rect(cx + 0.3, toSvY(baseMm + activeEvaluation.totalStackHeightMm), Math.max(0.8, cw - 0.6), cargoH, 'FD');
+
+        const lyrCount = Math.max(1, activeEvaluation.layerCount);
+        setStroke(doc, C_INK_MUTED);
+        doc.setLineWidth(0.12);
+        for (let li = 1; li < lyrCount; li++) {
+          const ly = toSvY(baseMm + activeEvaluation.totalStackHeightMm) + (cargoH * li) / lyrCount;
+          doc.line(cx + 0.3, ly, cx + cw - 0.3, ly);
+        }
+      };
+
+      for (const col of pdfSideCols.values()) {
+        const cx = toSvX(col.x - col.sizeX / 2);
+        const cw = col.sizeX * svScale;
+        drawPdfSideTier(cx, cw, 0, 1);
+        if (col.hasT2) {
+          drawPdfSideTier(cx, cw, activeEvaluation.totalStackHeightMm, 2);
+        }
+      }
+    }
+
+    drawDimensionLineVertical(
+      doc,
+      toSvY(vH),
+      svFloorY,
+      svOx - 4.2,
+      svOx,
+      `T ${vH} mm`,
+      C_INK_DARK
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.6);
+    setText(doc, C_INK_MUTED);
+    doc.text(
+      isFloorPdf && floorEvaluation
+        ? `Floor Loading: ${floorEvaluation.stackHeightMm} mm (${floorEvaluation.layersLoaded} lyr tanpa palet) | Batas Aman Efektif = ${floorEvaluation.effectiveClearHeightMm} mm | BCT Dasar SF ${floorEvaluation.bottomLayerSafetyFactor}:1`
+        : `1 Palet = ${activeEvaluation.totalStackHeightMm} mm (${activeEvaluation.layerCount} lyr) | Batas Aman Efektif = ${vehicleEvaluation.effectiveClearHeightMm} mm | Ruang Angkat Garpu Min = ${vehicle.forkliftLiftClearanceMm} mm`,
+      M + contentW / 2,
+      svY + svH - 2.3,
+      { align: 'center' }
+    );
+
+    // BOTTOM AUDIT BOX (y = 236.5..283.5)
+    const waY = 236.5;
+    const waH = 47;
+    setFill(doc, { r: 255, g: 255, b: 255 });
+    setStroke(doc, C_LINE);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(M, waY, contentW, waH, 1.2, 1.2, 'FD');
+
+    setFill(doc, C_HEADER_TINT);
+    doc.rect(M + 0.15, waY + 0.15, contentW - 0.3, 5.4, 'F');
+    doc.line(M, waY + 5.4, M + contentW, waY + 5.4);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.9);
+    setText(doc, C_INK_DARK);
+    doc.text(
+      isFloorPdf
+        ? 'AUDIT LAPANGAN FLOOR LOADING, BCT TUMPUKAN & PERBANDINGAN KAPASITAS'
+        : 'AUDIT LAPANGAN FORKLIFT, KETIDAKSTANDARAN KAROSERI & REKOMENDASI MUAT',
+      M + 2.4,
+      waY + 3.8
+    );
+
+    const rawAuditWarnings = isFloorPdf && floorEvaluation ? floorEvaluation.warnings : vehicleEvaluation.warnings;
+    const pdfWarnings =
+      rawAuditWarnings.length > 0
+        ? rawAuditWarnings.slice(0, 5)
+        : [
+            {
+              severity: 'info' as const,
+              title: 'Konfigurasi Armada Aman & Optimal',
+              detail: 'Dimensi ruang muat, clearance, BCT lapisan bawah, dan kapasitas berat memenuhi batas standar.',
+            },
+          ];
+
+    pdfWarnings.forEach((w, idx) => {
+      const wy = waY + 9.2 + idx * 7.4;
+      const dotCol = w.severity === 'critical' ? C_RED : w.severity === 'warning' ? C_AMBER : C_ACCENT;
+      setFill(doc, dotCol);
+      doc.circle(M + 4.0, wy - 0.8, 1.0, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.2);
+      setText(doc, C_INK_DARK);
+      doc.text(truncateToFit(doc, w.title, contentW - 10), M + 6.5, wy);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.7);
+      setText(doc, C_INK_BODY);
+      doc.text(truncateToFit(doc, w.detail, contentW - 10), M + 6.5, wy + 3.2);
+    });
+
+    // Page 3 Footer
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.1);
+    setText(doc, C_INK_MUTED);
+    doc.text('Dibuat oleh aplikasi DieCut.Room · Totale.Room Engineering Suite', M, 290);
+    doc.text(`Halaman 3 / ${totalPages}`, pageW - M, 290, { align: 'right' });
+  }
 
   const slug = projectTrimmed
     ? projectTrimmed

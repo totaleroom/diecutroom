@@ -122,19 +122,27 @@ $$
 F_{\text{print}} = \max\left(0.65,\; 1 - \left(\frac{C_{\text{weighted}}}{100} \cdot 0.18 + \min(\text{colors}, 6) \cdot 0.015\right)\right)
 $$
 
-### B. Faktor Koreksi Lainnya
-1. **Kelembaban Relatif ($RH\%$)**:
-   * $RH \le 50\% \rightarrow F_{\text{RH}} = 1.0$
-   * $50\% < RH \le 75\% \rightarrow F_{\text{RH}} = 1 - (RH - 50) \cdot 0.012$
-   * $RH > 75\% \rightarrow F_{\text{RH}} = \max(0.35,\; 0.70 - (RH - 75) \cdot 0.02)$
-2. **Handling Risk**: $0.85$ bila berisiko benturan/drop kasar, selain itu $1.0$.
+### B. Faktor Koreksi Lingkungan & Operasional (Kalibrasi Iklim Tropis Indonesia — BMKG / FBA / TAPPI T402)
+1. **Kelembaban Relatif ($RH\%$, Kurva Non-Linear FBA/Kellicutt — Default `75% RH`)**:
+   Interpolasi piecewise-linear berdasarkan tabel retensi serat selulosa FBA/Kellicutt yang dikalibrasi untuk musim & gudang non-AC Indonesia:
+   * `50% RH` (Lab TAPPI / AC) → **`1.00`** (`100%`)
+   * `60% RH` (Gudang Kering / Kemarau) → **`0.90`** (`90%`)
+   * `65% RH` → **`0.85`** (`85%`)
+   * `70% RH` (Transisi) → **`0.78`** (`78%`)
+   * `75% RH` *(Default Gudang Industri Non-AC Indonesia)* → **`0.71`** (`71%`)
+   * `80% RH` (Pesisir / Awal Musim Hujan) → **`0.62`** (`62%`)
+   * `85% RH` (Musim Hujan / Pelabuhan) → **`0.52`** (`52%`)
+   * `90% RH` (Hujan Ekstrem / Kontainer Laut) → **`0.42`** (`42%`)
+   * `95% RH` (Kondensasi / Cold-Chain Basah) → **`0.33`** (`33%`)
+2. **Handling Risk (Default `Aktif` untuk distribusi campuran Indonesia)**:
+   * `Aktif`: **`0.82`** (`-18%` bongkar-muat manual / LTL / jalan bergetar)
+   * `Nonaktif`: **`1.00`** (gudang modern *full-forklift & palletized*)
 3. **Stabilitas Rasio Tinggi (`D`) terhadap $\sqrt{L \cdot W}$**:
    * $R = \frac{D}{\sqrt{L \cdot W}} \le 1.5 \rightarrow 1.0$
    * $1.5 < R \le 2.5 \rightarrow \max(0.75,\; 1 - (R - 1.5) \cdot 0.12)$
    * $R > 2.5 \rightarrow \max(0.65,\; 0.88 - (R - 2.5) \cdot 0.10)$
-4. **Orientasi Flute Grain**:
-   * **TAPPI Mode**: `1.0` untuk *Vertical (Load)*, dan penalti tekuk kolom **`0.55`** bila *Horizontal*.
-   * **BCT Pro Legacy Mode**: Selalu mengasumsikan `1.0`.
+4. **Orientasi Flute Grain (TAPPI / ISO Engine Tunggal)**:
+   * `1.0` untuk *Vertical (Load)*, dan penalti tekuk kolom **`0.55`** bila *Horizontal*.
 
 ### C. BCT Efektif & Beban Tumpuk Aman Maksimum
 $$
@@ -146,7 +154,11 @@ $$
 $$
 \text{Max Safe Stacking Load} = \frac{\text{BCT}_{\text{corrected}}}{\text{Safety Factor}}
 $$
-*(Safety Factor default: `5:1` Industrial, dengan opsi `2.2:1`, `3:1`, `4:1`, `6:1`).*
+*(Safety Factor default: **`4:1` Gudang & Distribusi Indonesia**, dengan pilihan `3:1` Gudang AC / Jangka Pendek, `5:1` Ekspedisi LTL / Antar Pulau, dan `6:1` Musim Hujan / Kontainer Laut).*
+
+### D. Berat Nett Produk & Rekomendasi Material Bertahap (Anti-Overspec)
+* Setiap box memiliki input tersinkronisasi **`Berat Nett Produk / Dus (kg)`** dengan nilai default **`1.0 kg`** bila dikosongkan.
+* Berat kotor dus otomatis dihitung sebagai `Gross = Nett + Tare Karton (netBoxAreaSqm × boardGsm / 1000)` dan langsung menggerakkan beban lapisan bawah, intensitas warna **3D Heat-Map Palletizer**, kapasitas armada, serta katalog **2–3 kandidat material bertahap** (`Paling Pas`, `Seimbang`, `Cadangan`) yang memilih resep kertas paling ringan dan hemat tanpa *overspec* yang tetap lolos beban tumpukan pada RH, Handling, dan SF aktif.
 
 ---
 
@@ -186,5 +198,66 @@ $$
   - **Mode `flush` (`Rata Sisi`)**: Selalu meratakan 4 sisi luar palet untuk memaksimalkan kekokohan sudut luar dan meminimalkan sudut gantung.
   - **Mode `compact` (`Rapat`)**: Menyusun seluruh dus rapat tanpa celah internal.
   - **Pengukuran & Guardrail Celah Tengah (`measureInternalGaps`)**: Mendeteksi serta menggabungkan saluran celah internal `>= 4 mm` (`oddInternalGaps`, `evenInternalGaps`); memberi peringatan *inward-shift / chimney void* ketika `maxInternalGapMm > 50 mm` dengan rekomendasi *Tier Sheet* antar-layer atau peralihan ke mode `Rapat`.
+
+---
+
+## 9. Parameter Armada, Kontainer Indonesia & Clearance Forklift (`src/utils/vehicleLoading.ts`)
+
+Simulasi muat armada mencocokkan dimensi palet aktual (termasuk tinggi dek kayu & tumpukan dus) terhadap 11 preset kendaraan & kontainer di Indonesia (**ISO 20' GP**, **40' GP**, **40' HC**, **20' Reefer**, **40' HC Reefer**, **CDE Box**, **CDD Box**, **CDD Long**, **Fuso Box**, **Tronton Box**, **Tronton Wingbox**) maupun dimensi kustom (*Karoseri Non-Standar*).
+
+### A. Amplop Dimensi Efektif & Toleransi Karoseri Non-Standar
+Untuk mengantisipasi variasi dinding bergelombang, rel pengaman, atau ketidakstandaran karoseri truk boks Indonesia (`±50–150 mm`), dimensi bersih yang dipakai perhitungan muat dikurangi toleransi karoseri (`nonStandardToleranceMm`, bawaan `0 mm` untuk kontainer ISO dan `20–30 mm` untuk truk karoseri):
+$$L_{\text{eff}} = L_{\text{int}} - 2 \cdot T_{\text{karoseri}} - C_{\text{rear}}$$
+$$W_{\text{eff}} = \min(W_{\text{int}}, W_{\text{door}}) - 2 \cdot T_{\text{karoseri}} - 2 \cdot C_{\text{side}}$$
+* $C_{\text{side}}$: Jarak aman dinding samping per sisi (`sideWallClearanceMm`, standar `30 mm` untuk *rear-door* kontainer ISO agar garpu *forklift* tidak menggesek dinding; `40 mm` untuk *Reefer* demi sirkulasi udara dingin; `25 mm` untuk *Wingbox* buka samping).
+* $C_{\text{rear}}$: Ruang manuver pintu belakang (`rearDoorClearanceMm`, bawaan `80–100 mm`).
+* $C_{\text{gap}}$: Celah antar-palet (`palletGapMm`, bawaan `20–25 mm`) agar palet tidak menyangkut saat ditarik/didorong *forklift* atau *hand pallet*.
+
+### B. Bottleneck Tinggi Vertikal & Sinkronisasi Otomatis Tinggi Palet (1 Tier vs 2 Tier)
+Tinggi maksimum tumpukan palet (`maxStackHeightMm`) disinkronkan secara otomatis terhadap batas terketat dari 3 hambatan vertikal:
+1. **Hambatan Pintu Belakang (*Door Header Drop*)** — pada kontainer ISO (`20' GP`/`40' GP`), balok atas pintu lebih rendah `~115 mm` dari atap internal (`2275 mm` vs `2390 mm`); palet yang diangkat *forklift* (`forkliftLiftClearanceMm`, bawaan `100 mm`) wajib melewati bukaan pintu ini:
+   $$H_{\text{door\_limit}} = H_{\text{door}} - T_{\text{karoseri}} - C_{\text{lift}}$$
+2. **Batas Atap Internal**:
+   $$H_{\text{roof\_limit}} = H_{\text{int}} - T_{\text{karoseri}} - C_{\text{roof}}$$
+3. **Batas Garis Merah Reefer (*Red Load Line*)** — wajib menyisakan saluran udara dingin (*T-bar floor* ke langit-langit evaporator):
+   $$H_{\text{reefer\_limit}} = H_{\text{red\_line}} - C_{\text{roof}}$$
+
+Sehingga batas vertikal total yang tersedia di dalam armada adalah:
+$$H_{\text{avail}} = \min(H_{\text{door\_limit}},\; H_{\text{roof\_limit}},\; H_{\text{reefer\_limit}})$$
+
+Batas tinggi per palet (`maxStackHeightMm`) bergantung pada jumlah tingkat tumpukan palet (`1 Tier` vs `2 Tier` *Double-Stack*):
+* **Mode 1 Tier**:
+  $$H_{\text{pallet\_max, 1}} = H_{\text{avail}}$$
+* **Mode 2 Tier (*Double-Stack*)**: kedua palet harus melewati tinggi pintu/atap sambil memperhitungkan jarak angkat *forklift* saat memasukkan palet tingkat atas (`C_{\text{tier2}} = \max(C_{\text{lift}}, 80\text{ mm})`):
+  $$H_{\text{pallet\_max, 2}} = \left\lfloor \frac{\min(H_{\text{roof\_limit}}, H_{\text{reefer\_limit}}) - C_{\text{tier2}}}{2} \right\rfloor \quad \text{dibatasi juga oleh}\; H_{\text{door\_limit}}$$
+* **Mode `Auto`**: memilih **2 Tier** secara otomatis apabila tinggi 1 palet 2-tier masih mampu memuat minimal 2 layer dus (`H_{\text{pallet\_max, 2}} \ge H_{\text{deck}} + 2 \cdot H_{\text{box}}`) serta kapasitas muatan lebih tinggi; jika tidak, kembali ke **1 Tier**.
+
+### C. Strategi Denah Lantai (3 Pola & Batas Berat Muatan)
+Solver mengevaluasi tiga strategi penataan lantai di dalam `(L_eff, W_eff)`:
+1. **`lengthwise`**: Semua palet berorientasi panjang `L_p` sejajar panjang kontainer (`0°`).
+2. **`crosswise`**: Semua palet berorientasi lebar `W_p` sejajar panjang kontainer (`90°`).
+3. **`mixed` (*Pinwheel / Kombinasi*)**: Mengevaluasi **Side-by-Side Pinwheel** (1 kolom `L_p` + 1 kolom `W_p` berdampingan — krusial untuk palet ISO2 `1200×1000 mm` di kontainer lebar `2350 mm` karena `1200 + 1000 + gap = 2220 mm` pas masuk, meningkatkan kapasitas `20' GP` dari `8–9` menjadi `10 palet` dan `40' GP/HC` menjadi `20–21 palet`) serta **Tail-Split Mixed** (barisan utama + barisan sisa belakang berorientasi 90°).
+
+Kapasitas aktual palet yang dimuat juga dibatasi oleh **Payload Maksimum Armada (`maxPayloadKg`)**:
+$$N_{\text{loaded}} = \min\left(N_{\text{floor}} \times N_{\text{tiers}},\; \left\lfloor \frac{W_{\text{payload\_max}}}{W_{\text{pallet\_gross}}} \right\rfloor\right)$$
+
+### D. Audit BCT Tumpukan Ganda (*Double-Stack* 2 Tier)
+Saat mode `2 Tier` aktif, lapisan dus terbawah pada **Palet Bawah (Tier 1)** menopang seluruh berat dus di atasnya ditambah **seluruh berat kotor Palet Atas (Tier 2)** (termasuk bobot kayu palet `palletWeightKg`):
+$$W_{\text{double\_stack\_bottom}} = \frac{(N_{\text{layers}} - 1) \cdot N_{\text{per\_layer}} \cdot W_{\text{case}} + W_{\text{pallet\_gross}}}{N_{\text{per\_layer}}}$$
+Nilai `SF_double_stack = BCT_effective / W_double_stack_bottom` diaudit terhadap standar `SF >= 1.5` (kritis jika `< 1.0`, peringatan *slip-sheet* / *divider board* jika `< 1.5`). Pada kontainer **Reefer**, sistem juga memberi peringatan operasional batas beban poros *forklift* pada lantai aluminium *T-bar* (`<= 5.460 kg`).
+
+### E. Floor Loading (*Muat Tanpa Palet / Loose-Load*) & Perbandingan Kapasitas
+Selain mode `palletized`, solver mendukung mode `floor-loading` (`solveFloorLoading` & `comparePalletVsFloor`) di mana dus dimuat langsung di atas lantai kontainer/truk tanpa alas palet:
+1. **Dimensi Efektif & Batas Tinggi**:
+   * Celah dinding per sisi jauh lebih rapat dibanding ruang manuver *forklift* (`floorWallClearanceMm`, bawaan `15 mm/sisi`), sehingga $W_{\text{floor}} = W_{\text{int}} - 2 T_{\text{karoseri}} - 2 C_{\text{wall}}$ dan $L_{\text{floor}} = L_{\text{int}} - 2 T_{\text{karoseri}} - C_{\text{rear\_floor}}$.
+   * Tanpa beban angkat garpu *forklift*, tinggi muat bersih dibatasi oleh atap internal (`H_int - T_karoseri - C_roof`), bukaan pintu belakang (`H_door - T_karoseri - 20 mm`), atau **Red Load Line** pada Reefer (`H_red_line - C_roof`).
+2. **Penataan Lantai & Batas Muatan**:
+   * Solver mengevaluasi 3 strategi lantai pada dimensi luar dus `(L_box, W_box)`: `lengthwise` (`0°`), `crosswise` (`90°`), dan `mixed` (*tail-split* baris belakang berotasi `90°`), lalu membatasi jumlah dus total terhadap **Max Payload Armada**:
+     $$N_{\text{floor\_cases}} = \min\left(N_{\text{per\_layer}} \times \left\lfloor \frac{H_{\text{avail}}}{H_{\text{box}}} \right\rfloor,\; \left\lfloor \frac{W_{\text{payload\_max}}}{W_{\text{case}}} \right\rfloor\right)$$
+3. **Audit BCT Lapisan Dasar, Dunnage & Durasi Muat Manual**:
+   * Beban pada lapisan dus paling bawah (*bottom layer*) dihitung sebagai $W_{\text{bottom}} = (N_{\text{layers}} - 1) \cdot W_{\text{case}}$, diaudit terhadap `BCT_effective` (kritis jika `SF < 1.0`, waspada jika `SF < 1.5`).
+   * Apabila sisa ruang kosong di depan pintu belakang (`rearVoidMm`) `>= 140 mm`, sistem memunculkan peringatan **Dunnage / Airbag / Lashing Bar** untuk mencegah longsoran dus selama transit.
+   * Perbandingan langsung terhadap mode **Pakai Palet** menampilkan selisih dus (`Δ dus` & `+Δ%`), selisih utilisasi volume (`Δ%`), serta perbandingan estimasi durasi muat (*forklift* `~2–4 menit/palet` vs *hand-ball* manual `~4–6 dus/menit` per tim 2–3 orang).
+
 
 

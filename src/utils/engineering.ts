@@ -323,20 +323,25 @@ export function computePrintingFactor(printCoverage: number, numberOfColors = 0)
   return parseFloat(factor.toFixed(3));
 }
 
+/**
+ * Non-linear corrugated BCT moisture retention curve calibrated from Kellicutt & Landt (US FPL),
+ * Fibre Box Association (FBA), and TAPPI T402 for tropical Indonesian humidity (50%–95% RH).
+ */
 export function computeHumidityFactor(rh: number): number {
   const points = [
     { rh: 50, factor: 1.0 },
     { rh: 55, factor: 0.95 },
     { rh: 60, factor: 0.9 },
     { rh: 65, factor: 0.85 },
-    { rh: 70, factor: 0.8 },
-    { rh: 75, factor: 0.75 },
-    { rh: 80, factor: 0.7 },
-    { rh: 85, factor: 0.65 },
-    { rh: 90, factor: 0.6 },
+    { rh: 70, factor: 0.78 },
+    { rh: 75, factor: 0.71 },
+    { rh: 80, factor: 0.62 },
+    { rh: 85, factor: 0.52 },
+    { rh: 90, factor: 0.42 },
+    { rh: 95, factor: 0.33 },
   ];
   if (rh <= 50) return 1.0;
-  if (rh >= 90) return 0.6;
+  if (rh >= 95) return 0.33;
   for (let i = 0; i < points.length - 1; i++) {
     if (rh >= points[i].rh && rh <= points[i + 1].rh) {
       const span = points[i + 1].rh - points[i].rh;
@@ -345,11 +350,80 @@ export function computeHumidityFactor(rh: number): number {
       return parseFloat((points[i].factor + t * delta).toFixed(3));
     }
   }
-  return 0.9;
+  return 0.71;
 }
 
+export function getIndonesianHumidityContext(rh: number): {
+  label: string;
+  detail: string;
+} {
+  if (rh <= 52) {
+    return {
+      label: 'Standar Lab (23°C)',
+      detail: 'Kondisi uji laboratorium TAPPI/ISO sebelum paparan iklim tropis.',
+    };
+  }
+  if (rh <= 63) {
+    return {
+      label: 'Gudang AC / CPOB',
+      detail: 'Gudang ber-AC / dehumidifier (farmasi & modern DC).',
+    };
+  }
+  if (rh <= 72) {
+    return {
+      label: 'Kemarau / Ventilasi Baik',
+      detail: 'Musim kemarau Jawa/Bali (Apr–Okt) dengan sirkulasi gudang baik.',
+    };
+  }
+  if (rh <= 78) {
+    return {
+      label: 'Gudang Non-AC Indonesia',
+      detail: 'Rata-rata tahunan gudang industri (Bekasi, Surabaya, Semarang, Medan).',
+    };
+  }
+  if (rh <= 83) {
+    return {
+      label: 'Truk Boks / Pesisir',
+      detail: 'Distribusi darat non-AC, gudang pesisir, atau awal musim hujan.',
+    };
+  }
+  if (rh <= 88) {
+    return {
+      label: 'Musim Hujan / Laut',
+      detail: 'Puncak musim hujan Indonesia (Okt–Apr) & pengiriman laut antarpulau.',
+    };
+  }
+  return {
+    label: 'Ekstrem / Container Rain',
+    detail: 'Kelembaban pelabuhan basah, kondensasi cold-chain, atau embun kontainer.',
+  };
+}
+
+/**
+ * Indonesian supply-chain handling & transit shock factor:
+ * Active (0.82, -18%) reflects mixed manual/forklift unloading, road vibration & minor misalignment.
+ * Off (1.00) reflects modern full-forklift controlled warehouses.
+ */
 export function computeHandlingFactor(handlingRisk: boolean): number {
-  return handlingRisk ? 0.85 : 1.0;
+  return handlingRisk ? 0.82 : 1.0;
+}
+
+export function getEffectiveProductNetWeightKg(config: BoxConfig): number {
+  const val = config.product?.netWeightKg;
+  if (typeof val === 'number' && Number.isFinite(val) && val > 0) {
+    return Math.round(val * 100) / 100;
+  }
+  return 1.0;
+}
+
+export function computeCaseGrossWeightKg(
+  netProductWeightKg: number,
+  netBoxAreaSqm: number,
+  boardGsm: number
+): number {
+  const safeNet = Number.isFinite(netProductWeightKg) && netProductWeightKg > 0 ? netProductWeightKg : 1.0;
+  const tareKg = Math.max(0.06, (Math.max(0.01, netBoxAreaSqm) * Math.max(200, boardGsm)) / 1000);
+  return Math.round((safeNet + tareKg) * 100) / 100;
 }
 
 export function computeStabilityFactor(
@@ -544,80 +618,52 @@ export function computeEngineeringAnalysis(
 
   const auditFindings: AuditFindingNote[] = [];
 
-  if (!eng.useActualEct) {
-    if (config.boardGrade === 'double-wall') {
-      auditFindings.push({
-        id: 'audit-5ply-dw',
-        severity: Math.abs(ectDiffPct) > 8 ? 'warning' : 'info',
-        title: 'Double-Wall 5-ply vs Legacy 3-ply + 0.65x TUF',
-        detail: `TAPPI sums all 5 layers (L1 + ${fluteSpec.tuf1}·M1 + L2 + ${
-          fluteSpec.tuf2 ?? fluteSpec.tuf1
-        }·M2 + L3 = ${tappiResult.ectKgfCm.toFixed(
-          2
-        )} kgf/cm). BCT Pro drops center L2 & M2 and multiplies liners by ${fluteSpec.legacyTuf}x · 0.65 (${bctProResult.ectKgfCm.toFixed(
-          2
-        )} kgf/cm).`,
-      });
-    } else if (
-      tappiResult.ectSource === 'ESTIMATED_ECT' ||
-      bctProResult.ectSource === 'ESTIMATED_ECT'
-    ) {
-      auditFindings.push({
-        id: 'audit-ect-tuf',
-        severity: Math.abs(ectDiffPct) > 8 ? 'warning' : 'info',
-        title:
-          Math.abs(ectDiffPct) > 8
-            ? `Estimated ECT diverges by ${ectDiffPct > 0 ? '+' : ''}${ectDiffPct.toFixed(1)}%`
-            : 'Estimated ECT within tolerance',
-        detail: `BCT Pro's DU() computes ((L1+L2)*${fluteSpec.legacyTuf} + 0.5*M)*0.65, penalizing non-table specs by up to ~40%. TAPPI applies flute take-up (${fluteSpec.tuf1}x) strictly to medium RCT (${tappiResult.ectKgfCm.toFixed(
-          2
-        )} vs ${bctProResult.ectKgfCm.toFixed(2)} kgf/cm).`,
-      });
-    } else {
-      auditFindings.push({
-        id: 'audit-std-table',
-        severity: 'info',
-        title: 'Standard ECT table lookup active',
-        detail: `Both calculators match the mill reference table (${tappiResult.ectKgfCm.toFixed(
-          2
-        )} kgf/cm). Switch paper grades away from factory presets to inspect raw RCT formula divergence.`,
-      });
-    }
-  } else {
+  if (eng.useActualEct) {
     auditFindings.push({
       id: 'audit-actual-ect',
       severity: 'info',
-      title: 'Measured Actual ECT override active',
-      detail: `Both engines use lab-measured ${tappiResult.ectKgfCm.toFixed(
+      title: 'Override Actual ECT (Lab) aktif',
+      detail: `Perhitungan memakai nilai uji laboratorium ${tappiResult.ectKgfCm.toFixed(
         2
-      )} kgf/cm, isolating McKee perimeter and flute-grain differences only.`,
+      )} kgf/cm secara langsung.`,
+    });
+  } else {
+    auditFindings.push({
+      id: 'audit-ect-tappi',
+      severity: 'info',
+      title:
+        config.boardGrade === 'double-wall'
+          ? 'Evaluasi TAPPI/ISO 5-Ply Double-Wall'
+          : 'Evaluasi TAPPI/ISO 3-Ply Single-Wall',
+      detail: `ECT terkalibrasi ${tappiResult.ectKgfCm.toFixed(
+        2
+      )} kgf/cm dengan McKee OD perimeter ${outerPerimeterMm.toFixed(0)} mm.`,
     });
   }
 
-  auditFindings.push({
-    id: 'audit-perimeter',
-    severity: 'info',
-    title: `McKee perimeter basis: OD (${outerPerimeterMm.toFixed(0)} mm) vs ID (${innerPerimeterMm.toFixed(0)} mm)`,
-    detail: `TAPPI McKee measures outer box score perimeter (+${(
-      outerPerimeterMm - innerPerimeterMm
-    ).toFixed(1)} mm), adding ~${(
-      ((Math.pow(outerPerimeterMm, 0.492) / Math.pow(Math.max(1, innerPerimeterMm), 0.492)) -
-        1) *
-      100
-    ).toFixed(1)}% base compression capacity on thick flutes.`,
-  });
+  if (eng.relativeHumidity >= 80) {
+    auditFindings.push({
+      id: 'audit-rh-tropical',
+      severity: 'warning',
+      title: `Kelembaban tropis tinggi (${eng.relativeHumidity}% RH)`,
+      detail: `Kurva FBA/Kellicutt menahan ${(baseFactors.humidity * 100).toFixed(
+        0
+      )}% BCT awal — pastikan pakai Kraft virgin atau pertimbangkan kenaikan grade.`,
+    });
+  }
 
   if (config.prepress.fluteDirection === 'horizontal') {
     auditFindings.push({
       id: 'audit-flute-grain',
       severity: 'warning',
-      title: 'Horizontal flute grain ignored by BCT Pro Legacy',
+      title: 'Arah flute horizontal menurunkan BCT (-45%)',
       detail:
-        'BCT Pro assumes 100% vertical flutes. TAPPI mode applies the 0.55 horizontal-grain column buckling penalty.',
+        'Arah gelombang horizontal mengurangi kuat tekan kolom ke 55% dibanding flute vertikal standar.',
     });
   }
 
-  const active = eng.calculationMethod === 'bct-pro' ? bctProResult : tappiResult;
+  // Standardized single-engine evaluation: always TAPPI / ISO Calibrated
+  const active = tappiResult;
 
   // 4. Sheet Blank & Cutout Waste Calculation
   const { panelCoords } = paths;
