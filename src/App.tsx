@@ -10,6 +10,7 @@ import {
   Layers,
   ShieldCheck,
   PanelLeft,
+  PanelLeftClose,
   PanelRight,
   FolderOpen,
   Users,
@@ -54,6 +55,7 @@ import {
   DEFAULT_ARTWORK_2D_CONFIG,
   DEFAULT_CASE_PACK_CONFIG,
   DEFAULT_PALLET_CONFIG,
+  DisplayUnit,
   ExportMode,
   FLUTE_SPECS,
   LayerVisibility,
@@ -92,6 +94,7 @@ export default function App() {
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const [leftRailSlotEl, setLeftRailSlotEl] = useState<HTMLDivElement | null>(null);
   const [headerWidth, setHeaderWidth] = useState<number>(() =>
     typeof window !== 'undefined' ? window.innerWidth : 1280
   );
@@ -130,7 +133,7 @@ export default function App() {
   const [config, setConfig] = useState<BoxConfig>({
     boxStyle: '0201',
     flapOverlapMm: 30,
-    inputMode: 'product',
+    inputMode: 'id',
     product: {
       length: 196,
       width: 146,
@@ -515,56 +518,82 @@ export default function App() {
     setPalletExportTabRequest(tab);
   };
 
+  const handleUnitChange = (nextUnit: DisplayUnit) => {
+    setConfig((prev) => ({ ...prev, unit: nextUnit }));
+  };
+
+  const renderUnifiedLeftSidebar = (isCenteredMobile = false) => (
+    <aside
+      className={`surface-rail ${
+        isCenteredMobile
+          ? '!w-full !h-full !border-r-0'
+          : isLeftOverlay
+          ? 'relative z-10 w-[min(348px,92vw)] h-full shadow-[var(--shadow-modal)] border-r-[0.5px] border-[var(--line)]'
+          : 'w-[min(348px,92vw)] lg:w-[332px] xl:w-[348px] h-full border-r-[0.5px] border-[var(--line)]'
+      } bg-[var(--ground)] flex flex-col shrink-0 min-h-0 select-none`}
+    >
+      {/* Shared Branding Header (stationary across 2D, 3D Fit & Palletizer) */}
+      <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 shrink-0">
+        <div className="min-w-0">
+          <h1 className="font-brand text-[16px] leading-[20px] font-semibold text-[var(--ink-12)] truncate">
+            DieCut.Room
+          </h1>
+          <p className="text-[12px] leading-[16px] text-[var(--ink-10)] truncate">
+            {viewMode === 'pallet' ? 'Palletizer & armada 3D' : 'FEFCO CAD & fit simulator'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <TactileSegmented
+            value={config.unit}
+            onChange={handleUnitChange}
+            size="compact"
+            ariaLabel="Display unit"
+            options={[
+              { value: 'mm' as DisplayUnit, label: 'mm' },
+              { value: 'cm' as DisplayUnit, label: 'cm' },
+              { value: 'in' as DisplayUnit, label: 'in' },
+            ]}
+          />
+          <button
+            type="button"
+            onClick={() => setLeftRailOpen(false)}
+            aria-label={`Minimize panel ${leftRailLabel}`}
+            title={`Minimize panel ${leftRailLabel}`}
+            className="size-[34px] md:size-[28px] rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] active:scale-[0.95] transition-colors cursor-pointer shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]"
+          >
+            <PanelLeftClose size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* Dynamic Panel Slot: 2D/3D Specs Tabs ↔ Palletizer Palet/Armada Tabs */}
+      {viewMode === 'pallet' ? (
+        <div ref={setLeftRailSlotEl} className="flex-1 flex flex-col min-h-0" />
+      ) : (
+        <Suspense
+          fallback={
+            <div className="flex-1 flex items-center justify-center text-[12px] text-[var(--ink-10)]">
+              Memuat panel spesifikasi...
+            </div>
+          }
+        >
+          <Sidebar
+            embedded
+            config={config}
+            paths={paths}
+            analysis={analysis}
+            onChange={setConfig}
+            onOpenEngineering={isLeftOverlay ? handleOpenEngineeringFromSpecs : handleOpenEngineering}
+            onClose={handleCloseSpecs}
+          />
+        </Suspense>
+      )}
+    </aside>
+  );
+
   return (
     <div className="relative flex h-[100dvh] w-full bg-[var(--ground)] text-[var(--ink-12)] overflow-hidden">
-      {viewMode !== 'pallet' &&
-        !focusMode &&
-        (isLeftOverlay ? (
-          <MobileGenieSheet
-            open={specsOpen}
-            isMobileGenie={showMobileBottomDock}
-            side="left"
-            dockOrigin="left"
-            ariaLabel="Panel Spesifikasi DieCut"
-            onClose={handleCloseSpecs}
-          >
-            {({ isCenteredMobile }) => (
-              <Suspense fallback={null}>
-                <Sidebar
-                  config={config}
-                  paths={paths}
-                  analysis={analysis}
-                  onChange={setConfig}
-                  onOpenEngineering={handleOpenEngineeringFromSpecs}
-                  onClose={handleCloseSpecs}
-                  className={
-                    isCenteredMobile
-                      ? '!w-full !h-full !border-r-0'
-                      : 'relative z-10 shadow-[var(--shadow-modal)]'
-                  }
-                />
-              </Suspense>
-            )}
-          </MobileGenieSheet>
-        ) : (
-          specsOpen && (
-            <Suspense
-              fallback={
-                <div className="w-[300px] shrink-0 border-r-[0.5px] border-[var(--line)] bg-[var(--surface-top)]" />
-              }
-            >
-              <Sidebar
-                config={config}
-                paths={paths}
-                analysis={analysis}
-                onChange={setConfig}
-                onOpenEngineering={handleOpenEngineering}
-                onClose={handleCloseSpecs}
-              />
-            </Suspense>
-          )
-        ))}
-
       <main className="surface-panel flex-1 flex flex-col min-w-0 overflow-hidden bg-[var(--surface-top)]">
         {/* Container-Aware Anti-Clip Workspace Mode Header */}
         <header
@@ -971,73 +1000,60 @@ export default function App() {
           </div>
         </header>
 
-        {/* Active Viewport + Subtle Edge Quick-Toggle Handles (Desktop & Tablet) */}
-        <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
-          {!focusMode && !leftRailOpen && (
-            <button
-              type="button"
-              onClick={() => setLeftRailOpen(true)}
-              aria-label={`Buka panel ${leftRailLabel}`}
-              title={`Buka panel ${leftRailLabel}`}
-              className="hidden md:flex items-center gap-1.5 absolute left-0 top-1/2 -translate-y-1/2 z-20 h-11 px-2 rounded-r-[var(--radius-container)] bg-[var(--surface-top)]/95 backdrop-blur-sm border-[0.5px] border-l-0 border-[var(--line)] shadow-[var(--shadow-card)] text-[11px] font-medium text-[var(--ink-11)] hover:text-[var(--ink-12)] hover:bg-[var(--raised)] cursor-pointer transition-colors"
-            >
-              <SlidersHorizontal size={13} />
-              <span className="hidden lg:inline">{leftRailLabel}</span>
-            </button>
-          )}
+        {/* Middle Row: Unified Left Sidebar + Active Keep-Alive Viewport (locked above full-width Footer) */}
+        <div className="relative flex-1 flex min-h-0 overflow-hidden">
+          {!focusMode &&
+            (isLeftOverlay ? (
+              <MobileGenieSheet
+                open={leftRailOpen}
+                isMobileGenie={showMobileBottomDock}
+                side="left"
+                dockOrigin="left"
+                ariaLabel={
+                  viewMode === 'pallet'
+                    ? 'Panel Konfigurasi Palletizer'
+                    : 'Panel Spesifikasi DieCut'
+                }
+                onClose={() => setLeftRailOpen(false)}
+              >
+                {({ isCenteredMobile }) => renderUnifiedLeftSidebar(isCenteredMobile)}
+              </MobileGenieSheet>
+            ) : (
+              leftRailOpen && renderUnifiedLeftSidebar(false)
+            ))}
 
-          {!focusMode && !bctOpen && (
-            <button
-              type="button"
-              onClick={() => setBctOpen(true)}
-              aria-label="Buka panel BCT Pro"
-              title="Buka panel BCT Pro"
-              className="hidden md:flex items-center gap-1.5 absolute right-0 top-1/2 -translate-y-1/2 z-20 h-11 px-2 rounded-l-[var(--radius-container)] bg-[var(--surface-top)]/95 backdrop-blur-sm border-[0.5px] border-r-0 border-[var(--line)] shadow-[var(--shadow-card)] text-[11px] font-medium text-[var(--ink-11)] hover:text-[var(--ink-12)] hover:bg-[var(--raised)] cursor-pointer transition-colors"
-            >
-              <span className={`size-[7px] rounded-full ${statusDotClass}`} />
-              <PanelRight size={13} />
-              <span className="hidden lg:inline">BCT</span>
-            </button>
-          )}
+          {/* Active Viewport + Subtle Edge Quick-Toggle Handles (Desktop & Tablet) */}
+          <div className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+            {!focusMode && !leftRailOpen && (
+              <button
+                type="button"
+                onClick={() => setLeftRailOpen(true)}
+                aria-label={`Buka panel ${leftRailLabel}`}
+                title={`Buka panel ${leftRailLabel}`}
+                className="hidden md:flex items-center gap-1.5 absolute left-0 top-1/2 -translate-y-1/2 z-20 h-11 px-2 rounded-r-[var(--radius-container)] bg-[var(--surface-top)]/95 backdrop-blur-sm border-[0.5px] border-l-0 border-[var(--line)] shadow-[var(--shadow-card)] text-[11px] font-medium text-[var(--ink-11)] hover:text-[var(--ink-12)] hover:bg-[var(--raised)] cursor-pointer transition-colors"
+              >
+                <SlidersHorizontal size={13} />
+                <span className="hidden lg:inline">{leftRailLabel}</span>
+              </button>
+            )}
 
-          <div
-            className={
-              viewMode === '2d'
-                ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
-                : 'hidden'
-            }
-          >
-            <Suspense
-              fallback={
-                <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
-                  Menyiapkan kanvas 2D CAD...
-                </div>
-              }
-            >
-              <BoxPreview
-                paths={paths}
-                config={config}
-                analysis={analysis}
-                layers={layers}
-                onToggleLayer={handleToggleLayer}
-                onChangeConfig={setConfig}
-                exportMode={exportMode}
-                onChangeExportMode={setExportMode}
-                hasMobileFloatingDock={showMobileBottomDock}
-                focusMode={focusMode}
-                pdfExportTrigger={dielinePdfTrigger}
-                onPdfExportTriggered={handleClearPdfTrigger}
-                svgExportTrigger={dielineSvgTrigger}
-                onSvgExportTriggered={handleClearSvgTrigger}
-                onExportingPdfChange={setDielineExportingPdf}
-              />
-            </Suspense>
-          </div>
+            {!focusMode && !bctOpen && (
+              <button
+                type="button"
+                onClick={() => setBctOpen(true)}
+                aria-label="Buka panel BCT Pro"
+                title="Buka panel BCT Pro"
+                className="hidden md:flex items-center gap-1.5 absolute right-0 top-1/2 -translate-y-1/2 z-20 h-11 px-2 rounded-l-[var(--radius-container)] bg-[var(--surface-top)]/95 backdrop-blur-sm border-[0.5px] border-r-0 border-[var(--line)] shadow-[var(--shadow-card)] text-[11px] font-medium text-[var(--ink-11)] hover:text-[var(--ink-12)] hover:bg-[var(--raised)] cursor-pointer transition-colors"
+              >
+                <span className={`size-[7px] rounded-full ${statusDotClass}`} />
+                <PanelRight size={13} />
+                <span className="hidden lg:inline">BCT</span>
+              </button>
+            )}
 
-          {visitedTabs['3d'] && (
             <div
               className={
-                viewMode === '3d'
+                viewMode === '2d'
                   ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
                   : 'hidden'
               }
@@ -1045,56 +1061,94 @@ export default function App() {
               <Suspense
                 fallback={
                   <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
-                    Menyiapkan engine 3D WebGL...
+                    Menyiapkan kanvas 2D CAD...
                   </div>
                 }
               >
-                <Box3DViewer
-                  config={config}
+                <BoxPreview
                   paths={paths}
-                  hasMobileFloatingDock={showMobileBottomDock}
-                  isShortLandscape={isShortLandscape}
-                  focusMode={focusMode}
-                  isActive={viewMode === '3d'}
-                />
-              </Suspense>
-            </div>
-          )}
-
-          {visitedTabs.pallet && (
-            <div
-              className={
-                viewMode === 'pallet'
-                  ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
-                  : 'hidden'
-              }
-            >
-              <Suspense
-                fallback={
-                  <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
-                    Menyiapkan engine 3D WebGL...
-                  </div>
-                }
-              >
-                <PalletizerWorkspace
                   config={config}
-                  paths={paths}
                   analysis={analysis}
-                  onChange={setConfig}
-                  onOpenEngineering={handleOpenEngineering}
-                  railOpen={palletConfigOpen && !focusMode}
-                  isOverlayRail={isLeftOverlay}
-                  onCloseRail={handleClosePalletConfig}
+                  layers={layers}
+                  onToggleLayer={handleToggleLayer}
+                  onChangeConfig={setConfig}
+                  exportMode={exportMode}
+                  onChangeExportMode={setExportMode}
                   hasMobileFloatingDock={showMobileBottomDock}
-                  isShortLandscape={isShortLandscape}
                   focusMode={focusMode}
-                  requestedExportTab={palletExportTabRequest}
-                  onHandledExportRequest={handleHandledPalletExport}
-                  isActive={viewMode === 'pallet'}
+                  pdfExportTrigger={dielinePdfTrigger}
+                  onPdfExportTriggered={handleClearPdfTrigger}
+                  svgExportTrigger={dielineSvgTrigger}
+                  onSvgExportTriggered={handleClearSvgTrigger}
+                  onExportingPdfChange={setDielineExportingPdf}
                 />
               </Suspense>
             </div>
-          )}
+
+            {visitedTabs['3d'] && (
+              <div
+                className={
+                  viewMode === '3d'
+                    ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
+                    : 'hidden'
+                }
+              >
+                <Suspense
+                  fallback={
+                    <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
+                      Menyiapkan engine 3D WebGL...
+                    </div>
+                  }
+                >
+                  <Box3DViewer
+                    config={config}
+                    paths={paths}
+                    hasMobileFloatingDock={showMobileBottomDock}
+                    isShortLandscape={isShortLandscape}
+                    focusMode={focusMode}
+                    isActive={viewMode === '3d'}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {visitedTabs.pallet && (
+              <div
+                className={
+                  viewMode === 'pallet'
+                    ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
+                    : 'hidden'
+                }
+              >
+                <Suspense
+                  fallback={
+                    <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
+                      Menyiapkan engine 3D WebGL...
+                    </div>
+                  }
+                >
+                  <PalletizerWorkspace
+                    config={config}
+                    paths={paths}
+                    analysis={analysis}
+                    onChange={setConfig}
+                    onOpenEngineering={handleOpenEngineering}
+                    railOpen={leftRailOpen && !focusMode}
+                    isOverlayRail={isLeftOverlay}
+                    onCloseRail={handleClosePalletConfig}
+                    hasMobileFloatingDock={showMobileBottomDock}
+                    isShortLandscape={isShortLandscape}
+                    focusMode={focusMode}
+                    requestedExportTab={palletExportTabRequest}
+                    onHandledExportRequest={handleHandledPalletExport}
+                    isActive={viewMode === 'pallet'}
+                    useExternalLeftRail
+                    leftRailSlotEl={leftRailSlotEl}
+                  />
+                </Suspense>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Clean Engineering Footer (Hidden on mobile, short landscape & Focus Mode for max canvas height) */}
@@ -1183,7 +1237,7 @@ export default function App() {
           bctOpen && (
             <Suspense
               fallback={
-                <div className="w-[300px] shrink-0 border-l-[0.5px] border-[var(--line)] bg-[var(--surface-top)]" />
+                <div className="w-[332px] xl:w-[348px] shrink-0 border-l-[0.5px] border-[var(--line)] bg-[var(--ground)]" />
               }
             >
               <BCTInspectorRail
@@ -1301,7 +1355,7 @@ export default function App() {
           <ProjectsModal
             open={projectsModalOpen}
             currentConfig={config}
-            onLoadProject={(loaded) => setConfig(loaded)}
+            onLoadProject={(loaded) => setConfig({ ...loaded, inputMode: 'id' })}
             onClose={() => setProjectsModalOpen(false)}
           />
         </Suspense>

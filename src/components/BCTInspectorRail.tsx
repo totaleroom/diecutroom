@@ -20,6 +20,7 @@ import {
   DielinePaths,
   EngineeringAnalysis,
   FLUTE_SPECS,
+  FLUTE_TYPES,
   FluteDirection,
   ForceUnit,
   MEDIUM_GRADES,
@@ -134,7 +135,7 @@ function BCTInspectorRail({
       ? kgfCm.toFixed(2)
       : (kgfCm * KGF_CM_TO_LBF_IN).toFixed(1);
 
-  // Two-way Dimension Update (syncs CAD ID & recalculates weighted coverage)
+  // Two-way Direct ID Dimension Update (syncs CAD ID & recalculates weighted coverage)
   const handleDimChange = (axis: 'length' | 'width' | 'depth', mmVal: number) => {
     const nextDim = Math.max(20, Math.round(mmVal * 10) / 10);
     const nextDims = { ...config.dimensions, [axis]: nextDim };
@@ -153,29 +154,34 @@ function BCTInspectorRail({
         ? { ...eng, printCoverage: nextWeightedCoverage }
         : eng;
 
-    if (config.inputMode === 'product') {
-      const clearance =
-        axis === 'length'
-          ? config.product.clearanceL
-          : axis === 'width'
-          ? config.product.clearanceW
-          : config.product.clearanceD;
-      onChange({
-        ...config,
-        dimensions: nextDims,
-        engineering: nextEng,
-        product: {
-          ...config.product,
-          [axis]: Math.max(10, Math.round((nextDim - clearance) * 10) / 10),
-        },
-      });
-      return;
-    }
-
     onChange({
       ...config,
+      inputMode: 'id',
       dimensions: nextDims,
       engineering: nextEng,
+    });
+  };
+
+  // Two-way Board Grade Update (Single Wall 3-ply ↔ Double Wall 5-ply)
+  const handleBoardGradeChange = (grade: BoxConfig['boardGrade']) => {
+    if (grade === config.boardGrade) return;
+    const defaultFlute =
+      FLUTE_TYPES[grade].find((f) => f.id === 'C' || f.id === 'BC') ||
+      FLUTE_TYPES[grade][0];
+    const nextSubstance = formatSubstanceString(eng, grade);
+    onChange({
+      ...config,
+      boardGrade: grade,
+      fluteThickness: defaultFlute.thickness,
+      engineering: {
+        ...eng,
+        fluteId: defaultFlute.id,
+        ectValue: defaultFlute.defaultEct,
+      },
+      metadata: {
+        ...config.metadata,
+        materialSubstance: nextSubstance,
+      },
     });
   };
 
@@ -613,7 +619,7 @@ function BCTInspectorRail({
 
   return (
     <aside
-      className={`surface-rail w-[min(348px,92vw)] xl:w-[348px] h-full bg-[var(--ground)] border-l-[0.5px] border-[var(--line)] flex flex-col shrink-0 select-none ${className}`}
+      className={`surface-rail w-[min(348px,92vw)] lg:w-[332px] xl:w-[348px] h-full bg-[var(--ground)] border-l-[0.5px] border-[var(--line)] flex flex-col shrink-0 select-none ${className}`}
     >
       {/* Compact Rail Header with Direct Minimize Button */}
       <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 shrink-0">
@@ -861,14 +867,14 @@ function BCTInspectorRail({
               );
             })()}
 
-            {/* Synced Box Dimensions & Flute */}
+            {/* Synced Box Dimensions (Direct ID) & Board Construction */}
             <section className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <h3 className="text-[13px] leading-[20px] text-[var(--ink-12)]">
                   Inner dimensions ({unit})
                 </h3>
                 <span className="text-[11px] leading-[16px] text-[var(--ink-10)]">
-                  Synced with CAD
+                  Direct ID · CAD Sync
                 </span>
               </div>
 
@@ -914,7 +920,38 @@ function BCTInspectorRail({
               <div className="grid grid-cols-2 gap-2 pt-0.5">
                 <div>
                   <label className="block text-[11px] leading-[15px] text-[var(--ink-10)] mb-1">
-                    Flute profile
+                    Board color
+                  </label>
+                  <TactileSelect
+                    value={config.materialColor}
+                    onChange={(val) => onChange({ ...config, materialColor: val })}
+                    ariaLabel="Board color"
+                    options={[
+                      { value: 'kraft', label: 'Kraft (Brown)' },
+                      { value: 'white', label: 'Bleached white' },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] leading-[15px] text-[var(--ink-10)] mb-1">
+                    Board grade
+                  </label>
+                  <TactileSelect
+                    value={config.boardGrade}
+                    onChange={handleBoardGradeChange}
+                    ariaLabel="Board grade"
+                    options={[
+                      { value: 'single-wall', label: 'Single wall' },
+                      { value: 'double-wall', label: 'Double wall' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] leading-[15px] text-[var(--ink-10)] mb-1">
+                    Flute profile · {config.fluteThickness.toFixed(1)} mm
                   </label>
                   <TactileSelect
                     value={eng.fluteId}

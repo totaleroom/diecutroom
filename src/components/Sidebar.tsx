@@ -5,24 +5,16 @@ import {
   FLUTE_TYPES,
   PERFORATION_OPTIONS,
   PERFORATION_RULE_PRESETS,
-  TOLERANCE_PRESETS,
   DielinePaths,
   DisplayUnit,
   EngineeringAnalysis,
   FluteDirection,
   PerforationRuleMode,
   PerforationType,
-  TolerancePreset,
 } from '../types';
-import { fromMm, toMm, formatValue, validateITF14, fixITF14CheckDigit } from '../utils/units';
-import {
-  computeCaseGrossWeightKg,
-  computeWeightedPrintCoverage,
-  formatSubstanceString,
-  getEffectiveProductNetWeightKg,
-  parseSubstanceString,
-} from '../utils/engineering';
-import { Sparkles, ArrowUpRight, Info, PanelLeftClose } from 'lucide-react';
+import { validateITF14, fixITF14CheckDigit } from '../utils/units';
+import { parseSubstanceString } from '../utils/engineering';
+import { ArrowUpRight, Info, PanelLeftClose } from 'lucide-react';
 import {
   TactileButton,
   TactileCheckbox,
@@ -40,6 +32,7 @@ interface SidebarProps {
   onChange: (config: BoxConfig) => void;
   onOpenEngineering: () => void;
   onClose?: () => void;
+  embedded?: boolean;
   className?: string;
 }
 
@@ -52,113 +45,13 @@ function Sidebar({
   onChange,
   onOpenEngineering,
   onClose,
+  embedded = false,
   className = '',
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('structure');
 
-  const unit = config.unit;
-  const toDisplay = (mm: number) => Math.round(fromMm(mm, unit) * 100) / 100;
-  const parseDisplay = (val: string) => {
-    const num = Number(val);
-    return Number.isFinite(num) ? Math.max(0, toMm(num, unit)) : 0;
-  };
-
   const handleChange = <K extends keyof BoxConfig>(field: K, value: BoxConfig[K]) => {
     onChange({ ...config, [field]: value });
-  };
-
-  const handleDimensionChange = (field: keyof BoxConfig['dimensions'], mmValue: number) => {
-    const nextDims = { ...config.dimensions, [field]: Math.max(20, mmValue) };
-    const nextCoverage =
-      field === 'length' || field === 'width'
-        ? computeWeightedPrintCoverage(
-            config.engineering.panelPrintCoverage,
-            nextDims.length,
-            nextDims.width
-          )
-        : config.engineering.printCoverage;
-    onChange({
-      ...config,
-      dimensions: nextDims,
-      engineering: {
-        ...config.engineering,
-        printCoverage: nextCoverage,
-      },
-    });
-  };
-
-  const syncDimensionsFromProduct = (prod: BoxConfig['product'], baseConfig: BoxConfig): BoxConfig => {
-    const nextDims = {
-      length: Math.max(20, Math.round((prod.length + prod.clearanceL) * 10) / 10),
-      width: Math.max(20, Math.round((prod.width + prod.clearanceW) * 10) / 10),
-      depth: Math.max(20, Math.round((prod.depth + prod.clearanceD) * 10) / 10),
-    };
-    return {
-      ...baseConfig,
-      product: prod,
-      dimensions: nextDims,
-      engineering: {
-        ...baseConfig.engineering,
-        printCoverage: computeWeightedPrintCoverage(
-          baseConfig.engineering.panelPrintCoverage,
-          nextDims.length,
-          nextDims.width
-        ),
-      },
-    };
-  };
-
-  const handleProductField = (
-    field: 'length' | 'width' | 'depth' | 'clearanceL' | 'clearanceW' | 'clearanceD',
-    mmValue: number
-  ) => {
-    const isClearance = field.startsWith('clearance');
-    const nextProd: BoxConfig['product'] = {
-      ...config.product,
-      [field]: isClearance ? Math.max(-20, mmValue) : Math.max(10, mmValue),
-      tolerancePreset: isClearance ? 'custom' : config.product.tolerancePreset,
-    };
-    if (config.inputMode === 'product') {
-      onChange(syncDimensionsFromProduct(nextProd, config));
-    } else {
-      onChange({ ...config, product: nextProd });
-    }
-  };
-
-  const handleTolerancePreset = (preset: TolerancePreset) => {
-    if (preset === 'custom') {
-      onChange({
-        ...config,
-        product: { ...config.product, tolerancePreset: 'custom' },
-      });
-      return;
-    }
-    const spec = TOLERANCE_PRESETS[preset];
-    const nextProd: BoxConfig['product'] = {
-      ...config.product,
-      tolerancePreset: preset,
-      clearanceL: spec.clearanceL,
-      clearanceW: spec.clearanceW,
-      clearanceD: spec.clearanceD,
-    };
-    onChange(syncDimensionsFromProduct(nextProd, config));
-  };
-
-  const handleSnapZeroHeadspace = () => {
-    const nextProd: BoxConfig['product'] = {
-      ...config.product,
-      tolerancePreset: 'custom',
-      clearanceD: 0.5,
-    };
-    onChange(syncDimensionsFromProduct({ ...nextProd }, { ...config, inputMode: 'product' }));
-  };
-
-  const handleInputModeChange = (mode: 'id' | 'product') => {
-    if (mode === 'product') {
-      onChange(syncDimensionsFromProduct(config.product, { ...config, inputMode: 'product' }));
-    } else {
-      onChange({ ...config, inputMode: 'id' });
-    }
   };
 
   const handleAdvancedChange = <K extends keyof BoxConfig['advanced']>(
@@ -295,23 +188,10 @@ function Sidebar({
   const activeStyle = BOX_STYLES.find((s) => s.id === config.boxStyle) || BOX_STYLES[0];
   const activePerf = PERFORATION_OPTIONS.find((p) => p.id === config.perforation.type) || PERFORATION_OPTIONS[0];
   const barcodeCheck = validateITF14(config.barcode.value);
-  const diag = paths.info.headspaceDiagnostic;
 
   const styleOptions = BOX_STYLES.map((s) => ({
     value: s.id,
     label: `${s.code} - ${s.name}`,
-  }));
-
-  const toleranceOptions = [
-    { value: 'snug' as TolerancePreset, label: 'Snug / Zero-Headspace (+2/+2/+0.5 mm)' },
-    { value: 'standard' as TolerancePreset, label: 'Standard E-Commerce (+4/+4/+2 mm)' },
-    { value: 'protective' as TolerancePreset, label: 'Protective / Cushion (+12/+12/+10 mm)' },
-    { value: 'custom' as TolerancePreset, label: 'Custom per-axis clearance' },
-  ];
-
-  const fluteOptions = FLUTE_TYPES[config.boardGrade].map((f) => ({
-    value: f.thickness,
-    label: f.name,
   }));
 
   const totalAlerts = analysis.criticalCount + analysis.warningCount;
@@ -322,48 +202,10 @@ function Sidebar({
       ? 'bg-[var(--amber-9)]'
       : 'bg-[var(--green-9)]';
 
-  return (
-    <aside
-      className={`surface-rail w-[min(356px,92vw)] lg:w-[332px] xl:w-[356px] h-full bg-[var(--ground)] border-r-[0.5px] border-[var(--line)] flex flex-col shrink-0 select-none ${className}`}
-    >
-      <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 shrink-0">
-        <div className="min-w-0">
-          <h1 className="font-brand text-[16px] leading-[20px] font-semibold text-[var(--ink-12)] truncate">
-            DieCut.Room
-          </h1>
-          <p className="text-[12px] leading-[16px] text-[var(--ink-10)] truncate">
-            FEFCO CAD &amp; fit simulator
-          </p>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          <TactileSegmented
-            value={config.unit}
-            onChange={(u) => handleChange('unit', u)}
-            size="compact"
-            ariaLabel="Display unit"
-            options={[
-              { value: 'mm' as DisplayUnit, label: 'mm' },
-              { value: 'cm' as DisplayUnit, label: 'cm' },
-              { value: 'in' as DisplayUnit, label: 'in' },
-            ]}
-          />
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Minimize panel spesifikasi"
-              title="Minimize panel spesifikasi"
-              className="size-[34px] md:size-[28px] rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] active:scale-[0.95] transition-colors cursor-pointer shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]"
-            >
-              <PanelLeftClose size={15} />
-            </button>
-          )}
-        </div>
-      </div>
-
+  const panelInner = (
+    <div className="rail-panel-swap flex-1 flex flex-col min-h-0">
       {/* Tactile 3-Tab Navigation */}
-      <div className="px-4 py-2.5 border-b-[0.5px] border-[var(--line)]">
+      <div className="px-4 py-2.5 border-b-[0.5px] border-[var(--line)] shrink-0">
         <TactileSegmented
           value={activeTab}
           onChange={setActiveTab}
@@ -458,367 +300,12 @@ function Sidebar({
 
             <hr className="border-0 border-t-[0.5px] border-[var(--line)]" />
 
-            {/* Dimensions & Anti-Headspace Fit */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-[13px] leading-[20px] text-[var(--ink-12)]">
-                  Dimensions ({unit})
-                </h2>
-                <TactileSegmented
-                  value={config.inputMode}
-                  onChange={handleInputModeChange}
-                  size="compact"
-                  ariaLabel="Dimension input mode"
-                  options={[
-                    {
-                      value: 'id',
-                      label: 'Direct ID',
-                      title: 'Isi langsung ukuran dalam kardus (Panjang x Lebar x Tinggi)',
-                    },
-                    {
-                      value: 'product',
-                      label: 'Product fit',
-                      title: 'Hitung ukuran kardus otomatis dari ukuran fisik produk + kelonggaran',
-                    },
-                  ]}
-                />
-              </div>
-
-              <p className="text-[11.5px] leading-[16px] text-[var(--ink-10)]">
-                {config.inputMode === 'product'
-                  ? 'Product fit: masukkan ukuran fisik produk + kelonggaran (ΔL/ΔW/ΔD) agar ukuran dalam kardus & sisa ruang atas (headspace) dihitung otomatis.'
-                  : 'Direct ID: isi langsung ukuran bersih ruang dalam kardus (L × W × D) jika dimensi box sudah ditetapkan.'}
-              </p>
-
-              {config.inputMode === 'product' ? (
-                <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3.5 space-y-3">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        Prod L
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '1' : '0.1'}
-                        value={toDisplay(config.product.length)}
-                        onChange={(e) => handleProductField('length', parseDisplay(e.target.value))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        Prod W
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '1' : '0.1'}
-                        value={toDisplay(config.product.width)}
-                        onChange={(e) => handleProductField('width', parseDisplay(e.target.value))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        Prod D
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '1' : '0.1'}
-                        value={toDisplay(config.product.depth)}
-                        onChange={(e) => handleProductField('depth', parseDisplay(e.target.value))}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                      Headspace tolerance preset
-                    </label>
-                    <TactileSelect
-                      value={config.product.tolerancePreset}
-                      options={toleranceOptions}
-                      onChange={handleTolerancePreset}
-                      ariaLabel="Tolerance preset"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        ΔL ({unit})
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '0.5' : '0.05'}
-                        value={toDisplay(config.product.clearanceL)}
-                        onChange={(e) =>
-                          handleProductField('clearanceL', parseDisplay(e.target.value))
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        ΔW ({unit})
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '0.5' : '0.05'}
-                        value={toDisplay(config.product.clearanceW)}
-                        onChange={(e) =>
-                          handleProductField('clearanceW', parseDisplay(e.target.value))
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                        ΔD ({unit})
-                      </label>
-                      <TactileInputWell
-                        type="number"
-                        mono
-                        step={unit === 'mm' ? '0.5' : '0.05'}
-                        value={toDisplay(config.product.clearanceD)}
-                        onChange={(e) =>
-                          handleProductField('clearanceD', parseDisplay(e.target.value))
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  {diag && (
-                    <div className="pt-2.5 border-t-[0.5px] border-[var(--line)] space-y-1.5">
-                      <div className="flex items-center justify-between text-[12px] leading-[16px]">
-                        <span className="text-[var(--ink-10)]">Derived box ID</span>
-                        <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                          {`${formatValue(config.dimensions.length, unit)} x ${formatValue(
-                            config.dimensions.width,
-                            unit
-                          )} x ${formatValue(config.dimensions.depth, unit)} ${unit}`}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-[12px] leading-[16px]">
-                        <span className="text-[var(--ink-10)]">Headspace / fill</span>
-                        <span
-                          className={`font-mono tabular-nums ${
-                            diag.status === 'optimal'
-                              ? 'text-[var(--green-11)]'
-                              : diag.status === 'excessive'
-                              ? 'text-[var(--amber-11)]'
-                              : 'text-[var(--red-11)]'
-                          }`}
-                        >
-                          {`${formatValue(diag.headspaceMm, unit)} ${unit} · ${diag.volumeUtilizationPct}%`}
-                        </span>
-                      </div>
-                      <p className="text-[12px] leading-[18px] text-[var(--ink-11)]">
-                        {diag.message}
-                      </p>
-                      {diag.headspaceMm > 1 && (
-                        <TactileButton
-                          type="button"
-                          variant="secondary"
-                          size="compact"
-                          onClick={handleSnapZeroHeadspace}
-                          className="w-full mt-1"
-                        >
-                          <Sparkles size={14} className="text-[var(--ink-10)]" />
-                          Snap depth to snug fit (+0.5 mm)
-                        </TactileButton>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                      ID Length (L)
-                    </label>
-                    <TactileInputWell
-                      type="number"
-                      mono
-                      step={unit === 'mm' ? '1' : '0.1'}
-                      value={toDisplay(config.dimensions.length)}
-                      onChange={(e) =>
-                        handleDimensionChange('length', parseDisplay(e.target.value))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                      ID Width (W)
-                    </label>
-                    <TactileInputWell
-                      type="number"
-                      mono
-                      step={unit === 'mm' ? '1' : '0.1'}
-                      value={toDisplay(config.dimensions.width)}
-                      onChange={(e) =>
-                        handleDimensionChange('width', parseDisplay(e.target.value))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                      ID Depth (D)
-                    </label>
-                    <TactileInputWell
-                      type="number"
-                      mono
-                      step={unit === 'mm' ? '1' : '0.1'}
-                      value={toDisplay(config.dimensions.depth)}
-                      onChange={(e) =>
-                        handleDimensionChange('depth', parseDisplay(e.target.value))
-                      }
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Berat Nett Produk (Sinkron dengan BCT, Heat-Map & Rekomendasi Material) */}
-              {(() => {
-                const effectiveNetKg = getEffectiveProductNetWeightKg(config);
-                const grossKg = computeCaseGrossWeightKg(
-                  effectiveNetKg,
-                  analysis.netBoxAreaSqm,
-                  analysis.boardGsm
-                );
-                const tareKg = Math.max(0.05, grossKg - effectiveNetKg);
-                return (
-                  <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <label className="text-[12px] leading-[16px] font-medium text-[var(--ink-12)]">
-                        Berat nett produk / dus
-                      </label>
-                      <span className="text-[11px] font-mono tabular-nums text-[var(--ink-10)]">
-                        Kotor ~{grossKg.toFixed(2)} kg
-                      </span>
-                    </div>
-                    <TactileInputWell
-                      type="number"
-                      mono
-                      min={0.1}
-                      max={200}
-                      step="0.1"
-                      placeholder="1.0"
-                      value={config.product.netWeightKg ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value.trim();
-                        if (raw === '') {
-                          onChange({
-                            ...config,
-                            product: { ...config.product, netWeightKg: undefined },
-                          });
-                          return;
-                        }
-                        const parsed = Number(raw);
-                        if (Number.isFinite(parsed) && parsed >= 0) {
-                          onChange({
-                            ...config,
-                            product: {
-                              ...config.product,
-                              netWeightKg: Math.min(200, Math.round(parsed * 100) / 100),
-                            },
-                          });
-                        }
-                      }}
-                      suffix="kg"
-                    />
-                    <p className="text-[11px] leading-[15px] text-[var(--ink-10)]">
-                      Default 1.0 kg jika kosong · Tare karton ~{tareKg.toFixed(2)} kg · Mempengaruhi heat-map &amp; saran material.
-                    </p>
-                  </div>
-                );
-              })()}
-            </section>
-
-            <hr className="border-0 border-t-[0.5px] border-[var(--line)]" />
-
-            {/* Material & Construction */}
+            {/* Structural Allowances (includes Glue Flap Side & Width; Dimensions, Board & Flute live in BCT Pro) */}
             <section className="space-y-3">
               <h2 className="text-[13px] leading-[20px] text-[var(--ink-12)]">
-                Material and construction
+                Structural allowances
               </h2>
-
               <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                    Board color
-                  </label>
-                  <TactileSelect
-                    value={config.materialColor}
-                    onChange={(val) => handleChange('materialColor', val)}
-                    ariaLabel="Board color"
-                    options={[
-                      { value: 'kraft', label: 'Kraft (Brown)' },
-                      { value: 'white', label: 'Bleached white' },
-                    ]}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                    Board grade
-                  </label>
-                  <TactileSelect
-                    value={config.boardGrade}
-                    onChange={(grade) => {
-                      const defaultFlute =
-                        FLUTE_TYPES[grade].find((f) => f.id === 'B' || f.id === 'BC') ||
-                        FLUTE_TYPES[grade][0];
-                      onChange({
-                        ...config,
-                        boardGrade: grade,
-                        fluteThickness: defaultFlute.thickness,
-                        engineering: {
-                          ...config.engineering,
-                          fluteId: defaultFlute.id,
-                          ectValue: defaultFlute.defaultEct,
-                        },
-                        metadata: {
-                          ...config.metadata,
-                          materialSubstance: formatSubstanceString(config.engineering, grade),
-                        },
-                      });
-                    }}
-                    ariaLabel="Board grade"
-                    options={[
-                      { value: 'single-wall', label: 'Single wall' },
-                      { value: 'double-wall', label: 'Double wall' },
-                    ]}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                    Flute caliper
-                  </label>
-                  <TactileSelect
-                    value={config.fluteThickness}
-                    options={fluteOptions}
-                    onChange={(thickness) => {
-                      const matched = FLUTE_TYPES[config.boardGrade].find(
-                        (f) => f.thickness === thickness
-                      );
-                      onChange({
-                        ...config,
-                        fluteThickness: Number(thickness),
-                        engineering: matched
-                          ? {
-                              ...config.engineering,
-                              fluteId: matched.id,
-                              ectValue: matched.defaultEct,
-                            }
-                          : config.engineering,
-                      });
-                    }}
-                    ariaLabel="Flute caliper"
-                  />
-                </div>
                 <div>
                   <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
                     Glue flap side
@@ -833,9 +320,6 @@ function Sidebar({
                     ]}
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
                     Glue flap width
@@ -852,24 +336,7 @@ function Sidebar({
                     suffix="mm"
                   />
                 </div>
-                <div>
-                  <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
-                    Board thickness (T)
-                  </label>
-                  <div className="h-[32px] rounded-[var(--radius-control)] bg-[var(--ink-2)] px-2.5 flex items-center text-[13px] font-mono tabular-nums text-[var(--ink-11)]">
-                    {config.fluteThickness.toFixed(1)} mm
-                  </div>
-                </div>
               </div>
-            </section>
-
-            <hr className="border-0 border-t-[0.5px] border-[var(--line)]" />
-
-            {/* Structural Allowances */}
-            <section className="space-y-3">
-              <h2 className="text-[13px] leading-[20px] text-[var(--ink-12)]">
-                Structural allowances
-              </h2>
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[12px] leading-[16px] text-[var(--ink-10)] mb-1">
@@ -1368,6 +835,53 @@ function Sidebar({
           </>
         )}
       </div>
+    </div>
+  );
+
+  if (embedded) {
+    return panelInner;
+  }
+
+  return (
+    <aside
+      className={`surface-rail w-[min(348px,92vw)] lg:w-[332px] xl:w-[348px] h-full bg-[var(--ground)] border-r-[0.5px] border-[var(--line)] flex flex-col shrink-0 select-none ${className}`}
+    >
+      <div className="px-4 py-3 border-b-[0.5px] border-[var(--line)] flex items-center justify-between gap-2 shrink-0">
+        <div className="min-w-0">
+          <h1 className="font-brand text-[16px] leading-[20px] font-semibold text-[var(--ink-12)] truncate">
+            DieCut.Room
+          </h1>
+          <p className="text-[12px] leading-[16px] text-[var(--ink-10)] truncate">
+            FEFCO CAD &amp; fit simulator
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <TactileSegmented
+            value={config.unit}
+            onChange={(u) => handleChange('unit', u)}
+            size="compact"
+            ariaLabel="Display unit"
+            options={[
+              { value: 'mm' as DisplayUnit, label: 'mm' },
+              { value: 'cm' as DisplayUnit, label: 'cm' },
+              { value: 'in' as DisplayUnit, label: 'in' },
+            ]}
+          />
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Minimize panel spesifikasi"
+              title="Minimize panel spesifikasi"
+              className="size-[34px] md:size-[28px] rounded-[var(--radius-control)] flex items-center justify-center text-[var(--ink-10)] hover:text-[var(--ink-12)] hover:bg-[var(--ink-3)] active:scale-[0.95] transition-colors cursor-pointer shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]"
+            >
+              <PanelLeftClose size={15} />
+            </button>
+          )}
+        </div>
+      </div>
+      {panelInner}
     </aside>
   );
 }

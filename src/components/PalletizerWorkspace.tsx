@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -166,6 +167,8 @@ interface PalletizerWorkspaceProps {
   requestedExportTab?: 'engineering' | 'vector' | null;
   onHandledExportRequest?: () => void;
   isActive?: boolean;
+  useExternalLeftRail?: boolean;
+  leftRailSlotEl?: HTMLElement | null;
 }
 
 type LeftRailTab = 'pallet' | 'vehicle';
@@ -869,6 +872,8 @@ export default function PalletizerWorkspace({
   requestedExportTab = null,
   onHandledExportRequest,
   isActive = true,
+  useExternalLeftRail = false,
+  leftRailSlotEl = null,
 }: PalletizerWorkspaceProps) {
   const casePack: CasePackConfig = config.casePack || DEFAULT_CASE_PACK_CONFIG;
   const rawPallet: PalletConfig = config.pallet || DEFAULT_PALLET_CONFIG;
@@ -2126,23 +2131,16 @@ export default function PalletizerWorkspace({
 
   const BctStatusIcon = bctStatusMeta.icon;
 
-  const renderLeftRail = (isCenteredMobile = false) => (
-    <aside
-      className={`surface-rail ${
-        isCenteredMobile
-          ? 'w-full h-full border-r-0'
-          : isOverlayRail
-          ? 'relative z-10 w-[min(336px,92vw)] h-full shadow-[var(--shadow-modal)] border-r-[0.5px] border-[var(--line)]'
-          : 'w-[316px] xl:w-[336px] h-full border-r-[0.5px] border-[var(--line)]'
-      } bg-[var(--surface-top)] flex flex-col shrink-0 min-h-0`}
-    >
-      <div className="p-3 border-b-[0.5px] border-[var(--line)] shrink-0 flex items-center gap-2">
+  const renderLeftRailContent = (showInlineClose = false) => (
+    <div className="rail-panel-swap flex-1 flex flex-col min-h-0">
+      <div className="px-4 py-2.5 border-b-[0.5px] border-[var(--line)] shrink-0 flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <TactileSegmented
             value={railTab}
             onChange={setRailTab}
             fullWidth
             size="compact"
+            shape="control"
             ariaLabel="Palletizer configuration section"
             options={[
               { value: 'pallet', label: 'Palet' },
@@ -2150,7 +2148,7 @@ export default function PalletizerWorkspace({
             ]}
           />
         </div>
-        {onCloseRail && (
+        {showInlineClose && onCloseRail && (
           <button
             type="button"
             onClick={onCloseRail}
@@ -2163,7 +2161,7 @@ export default function PalletizerWorkspace({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3.5 py-3 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-5">
           {railTab === 'vehicle' ? (
             <>
               <TactileSection title="Armada & Kontainer Indonesia">
@@ -3672,27 +3670,49 @@ export default function PalletizerWorkspace({
               </TactileSection>
             </>
           )}
-        </div>
-      </aside>
+      </div>
+    </div>
+  );
+
+  const renderLeftRail = (isCenteredMobile = false) => (
+    <aside
+      className={`surface-rail ${
+        isCenteredMobile
+          ? 'w-full h-full border-r-0'
+          : isOverlayRail
+          ? 'relative z-10 w-[min(348px,92vw)] h-full shadow-[var(--shadow-modal)] border-r-[0.5px] border-[var(--line)]'
+          : 'w-[332px] xl:w-[348px] h-full border-r-[0.5px] border-[var(--line)]'
+      } bg-[var(--ground)] flex flex-col shrink-0 min-h-0`}
+    >
+      {renderLeftRailContent(true)}
+    </aside>
   );
 
   return (
     <div className="flex-1 flex min-h-0 overflow-hidden bg-[var(--ground)] relative">
-      {/* Left Configuration Rail: Docked on >= 1024px, Genie Centered on Mobile, Side Overlay on Tablet */}
-      {isOverlayRail ? (
-        <MobileGenieSheet
-          open={railOpen}
-          isMobileGenie={hasMobileFloatingDock}
-          side="left"
-          dockOrigin="left"
-          ariaLabel="Panel Konfigurasi Palletizer"
-          onClose={onCloseRail ?? (() => {})}
-        >
-          {({ isCenteredMobile }) => renderLeftRail(isCenteredMobile)}
-        </MobileGenieSheet>
-      ) : (
-        railOpen && renderLeftRail(false)
-      )}
+      {/* Unified Left Sidebar Portal (when hosted inside App's shared DieCut.Room left rail shell) */}
+      {useExternalLeftRail &&
+        isActive &&
+        railOpen &&
+        leftRailSlotEl &&
+        createPortal(renderLeftRailContent(false), leftRailSlotEl)}
+
+      {/* Standalone Left Configuration Rail fallback (only when not hosted in unified shell) */}
+      {!useExternalLeftRail &&
+        (isOverlayRail ? (
+          <MobileGenieSheet
+            open={railOpen}
+            isMobileGenie={hasMobileFloatingDock}
+            side="left"
+            dockOrigin="left"
+            ariaLabel="Panel Konfigurasi Palletizer"
+            onClose={onCloseRail ?? (() => {})}
+          >
+            {({ isCenteredMobile }) => renderLeftRail(isCenteredMobile)}
+          </MobileGenieSheet>
+        ) : (
+          railOpen && renderLeftRail(false)
+        ))}
 
       {/* Main 3D Palletizer Viewport */}
       <div className="@container relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#f1f3f6]">

@@ -90,6 +90,7 @@ export function useWorkspaceLayout() {
     (open: boolean) => {
       if (focusMode && open) setFocusMode(false);
       setSpecsOpen(open);
+      setPalletConfigOpen(open);
       // On narrow overlay screens, prevent stacked left + right drawers
       if (open && isLeftOverlay) {
         setBctOpen(false);
@@ -113,6 +114,7 @@ export function useWorkspaceLayout() {
   const openPalletConfig = useCallback(
     (open: boolean) => {
       if (focusMode && open) setFocusMode(false);
+      setSpecsOpen(open);
       setPalletConfigOpen(open);
       if (open && isLeftOverlay) {
         setBctOpen(false);

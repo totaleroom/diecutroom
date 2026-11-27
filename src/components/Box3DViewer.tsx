@@ -621,6 +621,14 @@ export default function Box3DViewer({
     resizeRendererRef.current = onResize;
     window.addEventListener('resize', onResize);
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            onResize();
+          })
+        : null;
+    resizeObserver?.observe(container);
+
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
@@ -629,6 +637,7 @@ export default function Box3DViewer({
     return () => {
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      resizeObserver?.disconnect();
       window.removeEventListener('resize', onResize);
       controls.removeEventListener('change', requestRender);
       controls.removeEventListener('start', onControlStart);
