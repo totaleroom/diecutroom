@@ -1,5 +1,46 @@
-import { BoxConfig, DielinePaths, DimensionLine, HeadspaceDiagnostic } from '../types';
+import { BoxConfig, BoxStyle, DielinePaths, DimensionLine, HeadspaceDiagnostic } from '../types';
 import { formatValue } from './units';
+
+export interface PlakbanZoneMetrics {
+  effectiveGapMm: number;
+  rawSideMm: number;
+  zoneDepthMm: number;
+  innerLipMm: number;
+  wasCappedByFlap: boolean;
+}
+
+/**
+ * Single source of truth for anti-counterfeit clear tape (plakban) coverage on each outer length flap.
+ * Subtracts the center meeting flap gap on butt-joint styles (0201/0204) before halving:
+ *   zone = (tapeWidthMm - effectiveGapMm) / 2
+ * Overlap flap styles (0202/0203) have no center air gap, so effectiveGapMm = 0.
+ * Reserves a crisp inner clear-tape lip (up to 1.0 mm) so the colored stripe sits 100% inside the tape edge.
+ */
+export function computePlakbanZoneMetrics(
+  tapeWidthMm: number,
+  flapHeightMm: number,
+  flapGapMm: number,
+  boxStyle: BoxStyle
+): PlakbanZoneMetrics {
+  const isOverlapFlap = boxStyle === '0202' || boxStyle === '0203';
+  const effectiveGapMm = isOverlapFlap
+    ? 0
+    : Math.max(0, Number.isFinite(flapGapMm) ? flapGapMm : 0);
+  const safeTape = Math.max(12, Number.isFinite(tapeWidthMm) ? tapeWidthMm : 48);
+  const rawSideMm = Math.max(4, (safeTape - effectiveGapMm) / 2);
+  const maxFlapCap = Math.max(8, Math.max(10, flapHeightMm) * 0.44);
+  const zoneDepthMm = Math.min(rawSideMm, maxFlapCap);
+  const wasCappedByFlap = rawSideMm > maxFlapCap + 0.05;
+  const innerLipMm = Math.min(1.0, Math.max(0.4, zoneDepthMm * 0.06));
+
+  return {
+    effectiveGapMm: Math.round(effectiveGapMm * 10) / 10,
+    rawSideMm: Math.round(rawSideMm * 10) / 10,
+    zoneDepthMm: Math.round(zoneDepthMm * 10) / 10,
+    innerLipMm: Math.round(innerLipMm * 100) / 100,
+    wasCappedByFlap,
+  };
+}
 
 export function generateRSCDieline(config: BoxConfig): DielinePaths {
   const {

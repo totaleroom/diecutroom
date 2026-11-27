@@ -45,7 +45,7 @@ interface SidebarProps {
 
 type SidebarTab = 'structure' | 'features' | 'metadata';
 
-export default function Sidebar({
+function Sidebar({
   config,
   paths,
   analysis,
@@ -1371,3 +1371,5 @@ export default function Sidebar({
     </aside>
   );
 }
+
+export default React.memo(Sidebar);

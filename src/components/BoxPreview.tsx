@@ -6,17 +6,42 @@ import {
   Layers,
   RotateCcw,
   ChevronDown,
+  Palette,
 } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
 import {
+  Artwork2DConfig,
+  ArtworkCustomElement,
   DielinePaths,
   BoxConfig,
+  DEFAULT_ARTWORK_2D_CONFIG,
+  DEFAULT_CASE_PACK_CONFIG,
+  DEFAULT_PALLET_CONFIG,
   EngineeringAnalysis,
   LayerVisibility,
   ExportMode,
   BOX_STYLES,
 } from '../types';
 import { formatValue } from '../utils/units';
+import {
+  computeBoardBurstKpa,
+  computeCaseGrossWeightKg,
+  computeSurfaceFrictionCoeff,
+} from '../utils/engineering';
+import {
+  evaluateAllPalletPatternsCached,
+  normalizePalletEdgeMarginMm,
+  pickOptimalPatternType,
+} from '../utils/palletizer';
+import {
+  buildPalletVectorSceneCached,
+  getCachedPalletVectorScene,
+  getPalletVectorSceneCacheKey,
+  PalletVectorScene,
+} from '../utils/palletizerVectorExport';
+import { scheduleIdleWork } from '../utils/browserEngine';
+import { computePlakbanZoneMetrics, PlakbanZoneMetrics } from '../utils/dieline';
+import Artwork2DPanel, { ArtworkPanelTab } from './Artwork2DPanel';
 import {
   TactileButton,
   TactileCheckbox,
@@ -31,6 +56,7 @@ interface BoxPreviewProps {
   onToggleLayer: (layer: keyof LayerVisibility) => void;
   exportMode: ExportMode;
   onChangeExportMode: (mode: ExportMode) => void;
+  onChangeConfig?: (updater: BoxConfig | ((prev: BoxConfig) => BoxConfig)) => void;
   hasMobileFloatingDock?: boolean;
   focusMode?: boolean;
   pdfExportTrigger?: number;
@@ -80,6 +106,7 @@ export default function BoxPreview({
   onToggleLayer,
   exportMode,
   onChangeExportMode,
+  onChangeConfig,
   hasMobileFloatingDock = false,
   focusMode = false,
   pdfExportTrigger = 0,
@@ -96,8 +123,267 @@ export default function BoxPreview({
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+  const [artworkPanelOpen, setArtworkPanelOpen] = useState(false);
+  const [artworkTab, setArtworkTab] = useState<ArtworkPanelTab>('plakban');
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+
+  type DragInteraction =
+    | {
+        mode: 'move-el';
+        elementId: string;
+        startSvgX: number;
+        startSvgY: number;
+        origX: number;
+        origY: number;
+      }
+    | {
+        mode: 'resize-el';
+        elementId: string;
+        handle: 'nw' | 'ne' | 'sw' | 'se' | 'e' | 's';
+        startSvgX: number;
+        startSvgY: number;
+        origX: number;
+        origY: number;
+        origW: number;
+        origH: number;
+        origFontSize?: number;
+      }
+    | {
+        mode: 'move-pallet-marks';
+        startSvgX: number;
+        startSvgY: number;
+        origOffX: number;
+        origOffY: number;
+      };
+  const dragRef = useRef<DragInteraction | null>(null);
+
+  // Merge stored artwork config with defaults cleanly (backward-compatible with older saved projects)
+  const artwork: Artwork2DConfig = useMemo(() => {
+    const raw = config.artwork;
+    if (!raw) return DEFAULT_ARTWORK_2D_CONFIG;
+    return {
+      antiCounterfeit: {
+        ...DEFAULT_ARTWORK_2D_CONFIG.antiCounterfeit,
+        ...(raw.antiCounterfeit || {}),
+        flaps: {
+          ...DEFAULT_ARTWORK_2D_CONFIG.antiCounterfeit.flaps,
+          ...(raw.antiCounterfeit?.flaps || {}),
+        },
+      },
+      palletMarks: {
+        ...DEFAULT_ARTWORK_2D_CONFIG.palletMarks,
+        ...(raw.palletMarks || {}),
+      },
+      elements: Array.isArray(raw.elements) ? raw.elements : [],
+    };
+  }, [config.artwork]);
+
+  const updateArtwork = useCallback(
+    (next: Artwork2DConfig) => {
+      if (!onChangeConfig) return;
+      onChangeConfig((prev) => ({
+        ...prev,
+        artwork: next,
+      }));
+    },
+    [onChangeConfig]
+  );
+
+  // Live synced Palletizer evaluation & transparent AI vector scene for Top Flap Panel 3 (L2)
+  const palletForVector = useMemo(() => {
+    const raw = config.pallet || DEFAULT_PALLET_CONFIG;
+    const norm = normalizePalletEdgeMarginMm(raw.allowedOverhangMm);
+    return raw.allowedOverhangMm === norm ? raw : { ...raw, allowedOverhangMm: norm };
+  }, [config.pallet]);
+
+  const netProductWeightKg = config.product?.netWeightKg;
+  const unitsPerCaseForPallet = (config.casePack || DEFAULT_CASE_PACK_CONFIG).unitsPerCase || 1;
+
+  const syncedPalletEvaluation = useMemo(() => {
+    try {
+      const netKg =
+        typeof netProductWeightKg === 'number' &&
+        Number.isFinite(netProductWeightKg) &&
+        netProductWeightKg > 0
+          ? Math.round(netProductWeightKg * 100) / 100
+          : 1.0;
+      const grossKg = computeCaseGrossWeightKg(
+        netKg,
+        analysis?.netBoxAreaSqm ?? paths.info.totalAreaSqM,
+        analysis?.boardGsm ?? 450
+      );
+      const bctKgf = analysis?.correctedBctKgf ?? 100;
+      const phys = {
+        surfaceFrictionCoeff: computeSurfaceFrictionCoeff(config.engineering),
+        burstStrengthKpa: computeBoardBurstKpa(config.engineering, config.boardGrade),
+        fluteThicknessMm: config.fluteThickness,
+        boardGrade: config.boardGrade,
+        boxStyle: config.boxStyle,
+        engineering: config.engineering,
+      };
+      const evals = evaluateAllPalletPatternsCached(
+        palletForVector,
+        paths.info.outerDimensions,
+        grossKg,
+        bctKgf,
+        config.engineering.safetyFactor,
+        unitsPerCaseForPallet,
+        phys
+      );
+      const recMode = palletForVector.recommendationMode || 'smart';
+      const isAuto = palletForVector.patternAutoMode !== false;
+      const targetPattern = isAuto
+        ? pickOptimalPatternType(evals, recMode)
+        : palletForVector.patternType;
+      return evals.find((e) => e.patternType === targetPattern) || evals[0] || null;
+    } catch {
+      return null;
+    }
+  }, [
+    palletForVector,
+    paths.info.outerDimensions,
+    paths.info.totalAreaSqM,
+    netProductWeightKg,
+    unitsPerCaseForPallet,
+    config.engineering,
+    config.boardGrade,
+    config.fluteThickness,
+    config.boxStyle,
+    analysis?.netBoxAreaSqm,
+    analysis?.boardGsm,
+    analysis?.correctedBctKgf,
+  ]);
+
+  const vectorSceneOptions = useMemo(
+    () => ({
+      includeFramesAndText: artwork.palletMarks.includeFramesAndText,
+      includeMaxStackPanel: artwork.palletMarks.includeMaxStackPanel,
+      strokePreset: artwork.palletMarks.strokePreset,
+    }),
+    [
+      artwork.palletMarks.includeFramesAndText,
+      artwork.palletMarks.includeMaxStackPanel,
+      artwork.palletMarks.strokePreset,
+    ]
+  );
+
+  const vectorSceneKey = useMemo(() => {
+    if (!syncedPalletEvaluation || !artwork.palletMarks.enabled || !paths.panelCoords.hasTopFlaps) {
+      return null;
+    }
+    return getPalletVectorSceneCacheKey(palletForVector, syncedPalletEvaluation, vectorSceneOptions);
+  }, [
+    syncedPalletEvaluation,
+    palletForVector,
+    vectorSceneOptions,
+    artwork.palletMarks.enabled,
+    paths.panelCoords.hasTopFlaps,
+  ]);
+
+  const cachedVectorScene = vectorSceneKey ? getCachedPalletVectorScene(vectorSceneKey) : null;
+  const [deferredVectorScene, setDeferredVectorScene] = useState<{
+    key: string;
+    scene: PalletVectorScene;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!vectorSceneKey || cachedVectorScene || !syncedPalletEvaluation) return;
+    let cancelled = false;
+    const cancelIdle = scheduleIdleWork(() => {
+      if (cancelled) return;
+      try {
+        const built = buildPalletVectorSceneCached(
+          palletForVector,
+          syncedPalletEvaluation,
+          vectorSceneOptions
+        );
+        if (!cancelled) {
+          setDeferredVectorScene({ key: vectorSceneKey, scene: built });
+        }
+      } catch {
+        // Ignore transient vector scene build errors
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
+  }, [vectorSceneKey, cachedVectorScene, palletForVector, syncedPalletEvaluation, vectorSceneOptions]);
+
+  const palletVectorScene =
+    cachedVectorScene ||
+    (vectorSceneKey && deferredVectorScene && deferredVectorScene.key === vectorSceneKey
+      ? deferredVectorScene.scene
+      : null);
+
+  // Convert client screen coordinates -> exact SVG millimeter coordinates (invariant to CSS zoom/pan)
+  const clientToSvgMm = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const transformed = pt.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }, []);
+
+  // Keyboard shortcuts while editing custom artwork elements (Delete, Escape, Arrow nudge)
+  useEffect(() => {
+    if (!artworkPanelOpen || !selectedElementId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSelectedElementId(null);
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        updateArtwork({
+          ...artwork,
+          elements: artwork.elements.filter((el) => el.id !== selectedElementId),
+        });
+        setSelectedElementId(null);
+        return;
+      }
+      const step = e.shiftKey ? 5 : 1;
+      let dx = 0;
+      let dy = 0;
+      if (e.key === 'ArrowLeft') dx = -step;
+      else if (e.key === 'ArrowRight') dx = step;
+      else if (e.key === 'ArrowUp') dy = -step;
+      else if (e.key === 'ArrowDown') dy = step;
+      if (dx !== 0 || dy !== 0) {
+        e.preventDefault();
+        updateArtwork({
+          ...artwork,
+          elements: artwork.elements.map((el) =>
+            el.id === selectedElementId && !el.locked
+              ? {
+                  ...el,
+                  x: Math.round((el.x + dx) * 10) / 10,
+                  y: Math.round((el.y + dy) * 10) / 10,
+                }
+              : el
+          ),
+        });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [artworkPanelOpen, selectedElementId, artwork, updateArtwork]);
 
   // Flatten JsBarcode bars into pure SVG <g> primitives (bearer bars, 10X quiet zones, & HRI rendered cleanly in mm)
   const flattenedBarcode = useMemo<FlattenedBarcode | null>(() => {
@@ -218,6 +504,10 @@ export default function BoxPreview({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    if (dragRef.current) return;
+    if (artworkPanelOpen) {
+      setSelectedElementId(null);
+    }
     setIsPanning(true);
     panStartRef.current = {
       x: e.clientX,
@@ -229,6 +519,74 @@ export default function BoxPreview({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag) {
+      const pt = clientToSvgMm(e.clientX, e.clientY);
+      if (!pt) return;
+      const dx = pt.x - drag.startSvgX;
+      const dy = pt.y - drag.startSvgY;
+      const snapHalf = (n: number) => Math.round(n * 2) / 2;
+
+      if (drag.mode === 'move-el') {
+        updateArtwork({
+          ...artwork,
+          elements: artwork.elements.map((el) =>
+            el.id === drag.elementId
+              ? { ...el, x: snapHalf(drag.origX + dx), y: snapHalf(drag.origY + dy) }
+              : el
+          ),
+        });
+      } else if (drag.mode === 'resize-el') {
+        let nx = drag.origX;
+        let ny = drag.origY;
+        let nw = drag.origW;
+        let nh = drag.origH;
+        const h = drag.handle;
+        if (h.includes('e')) nw = Math.max(4, drag.origW + dx);
+        if (h.includes('s')) nh = Math.max(2, drag.origH + dy);
+        if (h.includes('w')) {
+          const clampedDx = Math.min(dx, drag.origW - 4);
+          nx = drag.origX + clampedDx;
+          nw = drag.origW - clampedDx;
+        }
+        if (h.includes('n')) {
+          const clampedDy = Math.min(dy, drag.origH - 2);
+          ny = drag.origY + clampedDy;
+          nh = drag.origH - clampedDy;
+        }
+        updateArtwork({
+          ...artwork,
+          elements: artwork.elements.map((el) => {
+            if (el.id !== drag.elementId) return el;
+            const patch: Partial<ArtworkCustomElement> = {
+              x: snapHalf(nx),
+              y: snapHalf(ny),
+              width: snapHalf(nw),
+              height: snapHalf(nh),
+            };
+            if (el.kind === 'text' && drag.origFontSize && drag.origH > 1) {
+              const scaleRatio = nh / drag.origH;
+              patch.fontSizeMm = Math.max(
+                2,
+                Math.min(60, Math.round(drag.origFontSize * scaleRatio * 2) / 2)
+              );
+            }
+            return { ...el, ...patch };
+          }),
+        });
+      } else if (drag.mode === 'move-pallet-marks') {
+        updateArtwork({
+          ...artwork,
+          palletMarks: {
+            ...artwork.palletMarks,
+            offsetXMm: snapHalf(drag.origOffX + dx),
+            offsetYMm: snapHalf(drag.origOffY + dy),
+          },
+        });
+      }
+      return;
+    }
+
     if (!isPanning || !panStartRef.current) return;
     setPan({
       x: panStartRef.current.panX + (e.clientX - panStartRef.current.x),
@@ -237,6 +595,15 @@ export default function BoxPreview({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current) {
+      dragRef.current = null;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (!isPanning) return;
     setIsPanning(false);
     panStartRef.current = null;
@@ -245,6 +612,69 @@ export default function BoxPreview({
     } catch {
       // ignore if not captured
     }
+  };
+
+  const startElementMove = (
+    e: React.PointerEvent<SVGElement>,
+    el: ArtworkCustomElement
+  ) => {
+    if (!artworkPanelOpen) return;
+    e.stopPropagation();
+    setSelectedElementId(el.id);
+    setArtworkTab('canvas');
+    if (el.locked) return;
+    const pt = clientToSvgMm(e.clientX, e.clientY);
+    if (!pt) return;
+    dragRef.current = {
+      mode: 'move-el',
+      elementId: el.id,
+      startSvgX: pt.x,
+      startSvgY: pt.y,
+      origX: el.x,
+      origY: el.y,
+    };
+    viewportRef.current?.setPointerCapture(e.pointerId);
+  };
+
+  const startElementResize = (
+    e: React.PointerEvent<SVGElement>,
+    el: ArtworkCustomElement,
+    handle: 'nw' | 'ne' | 'sw' | 'se' | 'e' | 's'
+  ) => {
+    if (!artworkPanelOpen || el.locked) return;
+    e.stopPropagation();
+    const pt = clientToSvgMm(e.clientX, e.clientY);
+    if (!pt) return;
+    dragRef.current = {
+      mode: 'resize-el',
+      elementId: el.id,
+      handle,
+      startSvgX: pt.x,
+      startSvgY: pt.y,
+      origX: el.x,
+      origY: el.y,
+      origW: el.width,
+      origH: el.height,
+      origFontSize: el.fontSizeMm,
+    };
+    viewportRef.current?.setPointerCapture(e.pointerId);
+  };
+
+  const startPalletMarksDrag = (e: React.PointerEvent<SVGElement>) => {
+    if (!artworkPanelOpen) return;
+    e.stopPropagation();
+    setSelectedElementId(null);
+    setArtworkTab('pallet');
+    const pt = clientToSvgMm(e.clientX, e.clientY);
+    if (!pt) return;
+    dragRef.current = {
+      mode: 'move-pallet-marks',
+      startSvgX: pt.x,
+      startSvgY: pt.y,
+      origOffX: artwork.palletMarks.offsetXMm,
+      origOffY: artwork.palletMarks.offsetYMm,
+    };
+    viewportRef.current?.setPointerCapture(e.pointerId);
   };
 
   // Build clean standalone SVG clone matching exact ExportMode (Spec Sheet vs Clean CAD)
@@ -265,8 +695,18 @@ export default function BoxPreview({
       svgClone.querySelectorAll(`[data-export-role="${role}"]`).forEach((el) => el.remove());
     };
 
+    // Always strip interactive editor selection handles & dashed plakban guides from exported SVG/PDF
+    removeByRole('editor-overlay');
+
+    // Keep separated Illustrator-ready Artwork layers whenever layers.artwork is active
+    if (!layers.artwork) {
+      removeByRole('artwork-anticounterfeit');
+      removeByRole('artwork-pallet-marks');
+      removeByRole('artwork-custom');
+    }
+
     if (!isSpecSheet) {
-      // Clean CAD: keep ONLY Cut, Crease, Perforation (and optional Barcode if enabled)
+      // Clean CAD: keep Cut, Crease, Perforation, optional Barcode, and separated Artwork layers
       removeByRole('dimensions');
       removeByRole('product-overlay');
       removeByRole('title-block');
@@ -499,6 +939,7 @@ export default function BoxPreview({
                       { key: 'dimensions', label: 'Dimension lines' },
                       { key: 'productOverlay', label: 'Product fit overlay' },
                       { key: 'barcode', label: 'ITF-14 barcode' },
+                      { key: 'artwork', label: 'Artwork & shipping marks' },
                       { key: 'titleBlock', label: 'Legend and title block' },
                       { key: 'grid', label: 'Drafting grid' },
                     ] as Array<{ key: keyof LayerVisibility; label: string }>
@@ -551,6 +992,25 @@ export default function BoxPreview({
             )}
           </div>
 
+          {/* Dedicated 2D Artwork Studio Toggle Button (Tab 2D only) */}
+          {onChangeConfig && (
+            <TactileButton
+              type="button"
+              variant={artworkPanelOpen ? 'primary' : 'secondary'}
+              size="compact"
+              className="px-2 sm:px-2.5 gap-1 shrink-0"
+              aria-pressed={artworkPanelOpen}
+              onClick={() => {
+                setLayersOpen(false);
+                setArtworkPanelOpen((v) => !v);
+              }}
+              title="Buka panel Artwork 2D (Plakban Anti-Counterfeit, Vektor Pallet Flap L2 & Kanvas Kustom)"
+            >
+              <Palette size={13} className="shrink-0" />
+              <span className="whitespace-nowrap">Artwork</span>
+            </TactileButton>
+          )}
+
           {(pan.x !== 0 || pan.y !== 0 || zoom !== 1) && (
             <TactileButton
               type="button"
@@ -600,6 +1060,8 @@ export default function BoxPreview({
         </div>
       </div>
 
+      {/* Main 2D Canvas + Dedicated Docked Artwork Studio Side Panel */}
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
       {/* Expanded Interactive 2D CAD Drawing Area */}
       <div
         ref={viewportRef}
@@ -610,7 +1072,7 @@ export default function BoxPreview({
         className={`flex-1 flex items-center justify-center p-2 sm:p-3.5 ${
           hasMobileFloatingDock && !focusMode ? 'pb-20 md:pb-3.5' : ''
         } overflow-hidden relative select-none touch-none ${
-          isPanning ? 'cursor-grabbing' : 'cursor-grab'
+          isPanning ? 'cursor-grabbing' : artworkPanelOpen ? 'cursor-default' : 'cursor-grab'
         }`}
         style={
           effectiveLayers.grid
@@ -717,6 +1179,317 @@ export default function BoxPreview({
                     NO INK / GLUE
                   </text>
                 )}
+              </g>
+            )}
+
+            {/* ========================================================================
+                SEPARATED ILLUSTRATOR-READY 2D ARTWORK LAYERS (1:1 mm SVG & PDF)
+               ======================================================================== */}
+
+            {/* Artwork Layer 1: Anti-Counterfeit Plakban Strip across Length Flaps (L1 & L2 Top/Bottom) */}
+            {artwork.antiCounterfeit.enabled && (() => {
+              const ac = artwork.antiCounterfeit;
+              const pc = paths.panelCoords;
+              const halfSlot = Math.max(1, config.advanced.slotGap / 2);
+              const l1Start = pc.pL1_x1;
+              const l1End = pc.pL1_x2 - halfSlot;
+              const l2Start = pc.pL2_x1 + halfSlot;
+              const l2End = pc.pL2_x2 - halfSlot;
+              const topMetrics = computePlakbanZoneMetrics(
+                ac.tapeWidthMm,
+                pc.topFlapL,
+                config.advanced.flapGap,
+                config.boxStyle
+              );
+              const botMetrics = computePlakbanZoneMetrics(
+                ac.tapeWidthMm,
+                pc.flapL,
+                config.advanced.flapGap,
+                config.boxStyle
+              );
+              const repeats = Math.max(2, Math.min(12, Math.round(ac.repeatCount)));
+              const labelText = ac.text.trim();
+
+              const renderStrip = (
+                key: string,
+                xStart: number,
+                xEnd: number,
+                yOuter: number,
+                metrics: PlakbanZoneMetrics,
+                isBottom: boolean
+              ) => {
+                const spanW = Math.max(10, xEnd - xStart);
+                const zoneDepth = metrics.zoneDepthMm;
+                const innerLip = metrics.innerLipMm;
+                const availInsideTape = Math.max(3, zoneDepth - innerLip);
+                const stripeH = Math.min(ac.stripeHeightMm, Math.max(0, availInsideTape * 0.42));
+                const textBandH = Math.max(2.5, availInsideTape - stripeH);
+                const safeFontSize = Math.max(
+                  2.2,
+                  Math.min(ac.fontSizeMm, textBandH * 0.68, (spanW / repeats) * 0.28)
+                );
+                const yTop = isBottom ? yOuter - zoneDepth : yOuter;
+                const cx = xStart + spanW / 2;
+                const cy = yTop + zoneDepth / 2;
+                const textY = yTop + textBandH * 0.5 + safeFontSize * 0.35;
+                // Colored stripe sits fully inside the tape boundary (leaving innerLip clear tape margin)
+                const stripeY = yTop + zoneDepth - innerLip - stripeH;
+
+                return (
+                  <g
+                    key={key}
+                    id={`artwork-plakban-${key}`}
+                    transform={isBottom ? `rotate(180 ${cx} ${cy})` : undefined}
+                  >
+                    {stripeH > 0.1 && (
+                      <rect
+                        x={xStart}
+                        y={stripeY}
+                        width={spanW}
+                        height={stripeH}
+                        fill={ac.stripeColor}
+                        stroke="none"
+                      />
+                    )}
+                    {labelText &&
+                      Array.from({ length: repeats }, (_, idx) => (
+                        <text
+                          key={`${key}-t-${idx}`}
+                          x={xStart + ((idx + 0.5) / repeats) * spanW}
+                          y={textY}
+                          fontSize={safeFontSize}
+                          fontFamily="Arial, Helvetica, sans-serif"
+                          fontWeight="bold"
+                          letterSpacing={Math.max(0.15, safeFontSize * 0.06)}
+                          fill={ac.textColor}
+                          textAnchor="middle"
+                        >
+                          {labelText}
+                        </text>
+                      ))}
+                  </g>
+                );
+              };
+
+              return (
+                <g
+                  id="LAYER_ARTWORK_ANTICOUFEIT"
+                  data-export-role="artwork-anticounterfeit"
+                  display={layers.artwork ? undefined : 'none'}
+                >
+                  {pc.hasTopFlaps && ac.flaps.topL1 && renderStrip('top-L1', l1Start, l1End, pc.y0_L, topMetrics, false)}
+                  {pc.hasTopFlaps && ac.flaps.topL2 && renderStrip('top-L2', l2Start, l2End, pc.y0_L, topMetrics, false)}
+                  {ac.flaps.bottomL1 && renderStrip('bot-L1', l1Start, l1End, pc.y3_L, botMetrics, true)}
+                  {ac.flaps.bottomL2 && renderStrip('bot-L2', l2Start, l2End, pc.y3_L, botMetrics, true)}
+                </g>
+              );
+            })()}
+
+            {/* Artwork Layer 2: Transparent AI 3-Panel Pallet Pattern Shipping Marks on Top Flap Panel 3 (L2) */}
+            {artwork.palletMarks.enabled && paths.panelCoords.hasTopFlaps && palletVectorScene && (() => {
+              const pm = artwork.palletMarks;
+              const ac = artwork.antiCounterfeit;
+              const pc = paths.panelCoords;
+              const halfSlot = Math.max(1, config.advanced.slotGap / 2);
+              const topTapeOccupied =
+                ac.enabled && ac.flaps.topL2
+                  ? computePlakbanZoneMetrics(
+                      ac.tapeWidthMm,
+                      pc.topFlapL,
+                      config.advanced.flapGap,
+                      config.boxStyle
+                    ).zoneDepthMm
+                  : 0;
+
+              const padX = Math.max(3, Math.min(8, (pc.pL2_x2 - pc.pL2_x1) * 0.04));
+              const padY = 2.5;
+              const xStart = pc.pL2_x1 + halfSlot + padX;
+              const xEnd = pc.pL2_x2 - halfSlot - padX;
+              const yStart = pc.y0_L + topTapeOccupied + padY;
+              const yEnd = pc.y1 - padY;
+
+              const availW = Math.max(8, xEnd - xStart);
+              const availH = Math.max(8, yEnd - yStart);
+              const baseFit = Math.min(
+                availW / palletVectorScene.artboardWidthMm,
+                availH / palletVectorScene.artboardHeightMm
+              );
+              const scale = Math.max(0.05, baseFit * (pm.scalePct / 100));
+              const drawnW = palletVectorScene.artboardWidthMm * scale;
+              const drawnH = palletVectorScene.artboardHeightMm * scale;
+              const tx = xStart + (availW - drawnW) / 2 + pm.offsetXMm;
+              const ty = yStart + (availH - drawnH) / 2 + pm.offsetYMm;
+              const ink = pm.inkColor || '#111827';
+
+              return (
+                <g
+                  id="LAYER_ARTWORK_PALLET_MARKS"
+                  data-export-role="artwork-pallet-marks"
+                  display={layers.artwork ? undefined : 'none'}
+                  transform={`translate(${tx}, ${ty}) scale(${scale})`}
+                  onPointerDown={startPalletMarksDrag}
+                  style={{ cursor: artworkPanelOpen ? 'move' : 'inherit' }}
+                >
+                  {/* Transparent hit target while Artwork Studio is open for effortless repositioning */}
+                  {artworkPanelOpen && (
+                    <rect
+                      data-export-role="editor-overlay"
+                      x={0}
+                      y={0}
+                      width={palletVectorScene.artboardWidthMm}
+                      height={palletVectorScene.artboardHeightMm}
+                      fill="transparent"
+                      stroke="#4F46E5"
+                      strokeWidth={1.2 / scale}
+                      strokeDasharray={`${4 / scale},${3 / scale}`}
+                      opacity={artworkTab === 'pallet' ? 0.7 : 0.25}
+                    />
+                  )}
+                  {palletVectorScene.groups.map((grp) => (
+                    <g key={grp.id} id={`pallet-mark-${grp.id}`}>
+                      {grp.rects.map((rect, ri) => (
+                        <rect
+                          key={`r-${ri}`}
+                          x={rect.x}
+                          y={rect.y}
+                          width={rect.w}
+                          height={rect.h}
+                          rx={rect.rx}
+                          ry={rect.rx}
+                          fill={rect.fill ? ink : 'none'}
+                          stroke={rect.stroke ? ink : 'none'}
+                          strokeWidth={rect.stroke ? (rect.strokeWidthMm ?? palletVectorScene.baseStrokeWidthMm) : undefined}
+                          strokeLinejoin="round"
+                        />
+                      ))}
+                      {grp.segments.map((seg, si) => (
+                        <line
+                          key={`s-${si}`}
+                          x1={seg.x1}
+                          y1={seg.y1}
+                          x2={seg.x2}
+                          y2={seg.y2}
+                          fill="none"
+                          stroke={ink}
+                          strokeWidth={seg.strokeWidthMm ?? palletVectorScene.baseStrokeWidthMm}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      ))}
+                      {grp.texts.map((t, ti) => (
+                        <text
+                          key={`t-${ti}`}
+                          x={t.x}
+                          y={t.y}
+                          fill={ink}
+                          stroke="none"
+                          fontFamily="Arial, Helvetica, sans-serif"
+                          fontWeight={t.bold ? 'bold' : 'normal'}
+                          fontSize={t.fontSizeMm}
+                          textAnchor={
+                            t.align === 'left' ? 'start' : t.align === 'right' ? 'end' : 'middle'
+                          }
+                        >
+                          {t.text}
+                        </text>
+                      ))}
+                    </g>
+                  ))}
+                </g>
+              );
+            })()}
+
+            {/* Artwork Layer 3: User Custom Shapes & Free Text (Interactive Drag/Resize + Exportable) */}
+            {artwork.elements.length > 0 && (
+              <g
+                id="LAYER_ARTWORK_CUSTOM"
+                data-export-role="artwork-custom"
+                display={layers.artwork ? undefined : 'none'}
+              >
+                {artwork.elements.map((el) => {
+                  const cx = el.x + el.width / 2;
+                  const cy = el.y + el.height / 2;
+                  const rotTransform = el.rotation ? `rotate(${el.rotation} ${cx} ${cy})` : undefined;
+                  const interactiveCursor = artworkPanelOpen
+                    ? el.locked
+                      ? 'not-allowed'
+                      : 'move'
+                    : 'inherit';
+
+                  if (el.kind === 'text') {
+                    const lines = (el.text || '').split('\n');
+                    const fs = el.fontSizeMm ?? 10;
+                    const lineH = fs * 1.22;
+                    const totalTextH = lines.length * lineH;
+                    const anchorX =
+                      el.textAlign === 'left'
+                        ? el.x + 1
+                        : el.textAlign === 'right'
+                        ? el.x + el.width - 1
+                        : cx;
+                    const textAnchor =
+                      el.textAlign === 'left'
+                        ? 'start'
+                        : el.textAlign === 'right'
+                        ? 'end'
+                        : 'middle';
+                    const startY = cy - totalTextH / 2 + fs * 0.85;
+
+                    return (
+                      <g
+                        key={el.id}
+                        id={`custom-text-${el.id}`}
+                        transform={rotTransform}
+                        opacity={el.opacity}
+                        onPointerDown={(e) => startElementMove(e, el)}
+                        style={{ cursor: interactiveCursor }}
+                      >
+                        {artworkPanelOpen && (
+                          <rect
+                            data-export-role="editor-overlay"
+                            x={el.x}
+                            y={el.y}
+                            width={el.width}
+                            height={el.height}
+                            fill="transparent"
+                          />
+                        )}
+                        {lines.map((line, li) => (
+                          <text
+                            key={`${el.id}-l-${li}`}
+                            x={anchorX}
+                            y={startY + li * lineH}
+                            fontSize={fs}
+                            fontFamily="Arial, Helvetica, sans-serif"
+                            fontWeight={el.fontWeight || 'bold'}
+                            fill={el.fillColor === 'none' ? '#111827' : el.fillColor}
+                            textAnchor={textAnchor}
+                          >
+                            {line}
+                          </text>
+                        ))}
+                      </g>
+                    );
+                  }
+
+                  return (
+                    <rect
+                      key={el.id}
+                      id={`custom-${el.kind}-${el.id}`}
+                      x={el.x}
+                      y={el.y}
+                      width={el.width}
+                      height={el.height}
+                      fill={el.fillColor}
+                      stroke={el.strokeColor}
+                      strokeWidth={el.strokeColor !== 'none' ? el.strokeWidthMm : 0}
+                      opacity={el.opacity}
+                      transform={rotTransform}
+                      onPointerDown={(e) => startElementMove(e, el)}
+                      style={{ cursor: interactiveCursor }}
+                    />
+                  );
+                })}
               </g>
             )}
 
@@ -1249,8 +2022,162 @@ export default function BoxPreview({
                 </text>
               ))}
             </g>
+
+            {/* Non-Exportable Editor Overlays: Plakban Safe Tape Boundary Guides + Selected Element Resize Handles */}
+            {artworkPanelOpen && (
+              <g data-export-role="editor-overlay">
+                {/* Dashed Plakban Tape Boundary Guides on Active Length Flaps (Top & Bottom L1/L2) */}
+                {artwork.antiCounterfeit.enabled && (() => {
+                  const ac = artwork.antiCounterfeit;
+                  const pc = paths.panelCoords;
+                  const halfSlot = Math.max(1, config.advanced.slotGap / 2);
+                  const topZone = computePlakbanZoneMetrics(
+                    ac.tapeWidthMm,
+                    pc.topFlapL,
+                    config.advanced.flapGap,
+                    config.boxStyle
+                  ).zoneDepthMm;
+                  const botZone = computePlakbanZoneMetrics(
+                    ac.tapeWidthMm,
+                    pc.flapL,
+                    config.advanced.flapGap,
+                    config.boxStyle
+                  ).zoneDepthMm;
+                  const topGuideY = pc.y0_L + topZone;
+                  const botGuideY = pc.y3_L - botZone;
+                  return (
+                    <g pointerEvents="none" opacity={artworkTab === 'plakban' ? 0.85 : 0.35}>
+                      {pc.hasTopFlaps && ac.flaps.topL1 && (
+                        <line
+                          x1={pc.pL1_x1}
+                          y1={topGuideY}
+                          x2={pc.pL1_x2 - halfSlot}
+                          y2={topGuideY}
+                          stroke="#4F46E5"
+                          strokeWidth="0.9"
+                          strokeDasharray="4,3"
+                        />
+                      )}
+                      {pc.hasTopFlaps && ac.flaps.topL2 && (
+                        <line
+                          x1={pc.pL2_x1 + halfSlot}
+                          y1={topGuideY}
+                          x2={pc.pL2_x2 - halfSlot}
+                          y2={topGuideY}
+                          stroke="#4F46E5"
+                          strokeWidth="0.9"
+                          strokeDasharray="4,3"
+                        />
+                      )}
+                      {ac.flaps.bottomL1 && (
+                        <line
+                          x1={pc.pL1_x1}
+                          y1={botGuideY}
+                          x2={pc.pL1_x2 - halfSlot}
+                          y2={botGuideY}
+                          stroke="#4F46E5"
+                          strokeWidth="0.9"
+                          strokeDasharray="4,3"
+                        />
+                      )}
+                      {ac.flaps.bottomL2 && (
+                        <line
+                          x1={pc.pL2_x1 + halfSlot}
+                          y1={botGuideY}
+                          x2={pc.pL2_x2 - halfSlot}
+                          y2={botGuideY}
+                          stroke="#4F46E5"
+                          strokeWidth="0.9"
+                          strokeDasharray="4,3"
+                        />
+                      )}
+                    </g>
+                  );
+                })()}
+
+                {/* Active Custom Element Selection Box & Resize Handles */}
+                {selectedElementId && (() => {
+                  const sel = artwork.elements.find((e) => e.id === selectedElementId);
+                  if (!sel) return null;
+                  const cx = sel.x + sel.width / 2;
+                  const cy = sel.y + sel.height / 2;
+                  const hs = Math.max(3.6, Math.min(7, previewMetrics.viewBoxW * 0.008));
+                  const half = hs / 2;
+                  const handles: Array<{
+                    key: 'nw' | 'ne' | 'sw' | 'se' | 'e' | 's';
+                    x: number;
+                    y: number;
+                    cursor: string;
+                  }> = [
+                    { key: 'nw', x: sel.x, y: sel.y, cursor: 'nwse-resize' },
+                    { key: 'ne', x: sel.x + sel.width, y: sel.y, cursor: 'nesw-resize' },
+                    { key: 'sw', x: sel.x, y: sel.y + sel.height, cursor: 'nesw-resize' },
+                    { key: 'se', x: sel.x + sel.width, y: sel.y + sel.height, cursor: 'nwse-resize' },
+                    { key: 'e', x: sel.x + sel.width, y: cy, cursor: 'ew-resize' },
+                    { key: 's', x: cx, y: sel.y + sel.height, cursor: 'ns-resize' },
+                  ];
+                  return (
+                    <g transform={sel.rotation ? `rotate(${sel.rotation} ${cx} ${cy})` : undefined}>
+                      <rect
+                        x={sel.x}
+                        y={sel.y}
+                        width={sel.width}
+                        height={sel.height}
+                        fill="none"
+                        stroke="#4F46E5"
+                        strokeWidth="1.2"
+                        strokeDasharray="4,2"
+                        pointerEvents="none"
+                      />
+                      {!sel.locked &&
+                        handles.map((h) => (
+                          <rect
+                            key={h.key}
+                            x={h.x - half}
+                            y={h.y - half}
+                            width={hs}
+                            height={hs}
+                            rx={0.8}
+                            fill="#FFFFFF"
+                            stroke="#4F46E5"
+                            strokeWidth="1.2"
+                            style={{ cursor: h.cursor }}
+                            onPointerDown={(e) => startElementResize(e, sel, h.key)}
+                          />
+                        ))}
+                    </g>
+                  );
+                })()}
+              </g>
+            )}
           </svg>
         </div>
+      </div>
+
+      {/* Dedicated 2D Artwork Side Panel (Docked on Large Screens, Crisp Overlay Drawer on Compact/Mobile) */}
+      {artworkPanelOpen && onChangeConfig && (
+        <>
+          <div
+            className="lg:hidden absolute inset-0 bg-[var(--backdrop)]/40 z-20"
+            onClick={() => setArtworkPanelOpen(false)}
+            aria-hidden="true"
+          />
+          <Artwork2DPanel
+            artwork={artwork}
+            paths={paths}
+            flapGapMm={config.advanced.flapGap}
+            boxStyle={config.boxStyle}
+            palletEvaluation={syncedPalletEvaluation}
+            selectedElementId={selectedElementId}
+            onSelectElement={setSelectedElementId}
+            onChange={updateArtwork}
+            onClose={() => setArtworkPanelOpen(false)}
+            activeTab={artworkTab}
+            onActiveTabChange={setArtworkTab}
+            className="absolute inset-y-0 right-0 z-30 shadow-[var(--shadow-modal)] w-[min(320px,92vw)] lg:static lg:z-auto lg:shadow-none lg:w-[308px] xl:w-[324px]"
+          />
+        </>
+      )}
       </div>
     </div>
   );

@@ -878,8 +878,9 @@ export function buildPalletVectorScene(
   const artboardHeightMm = includeFramesAndText ? outerPad * 2 + panelSize : outerPad * 2 + 56;
 
   const groups: VectorGroup[] = [];
-  const layer1Boxes = evaluation.placements.filter((b) => b.layer === 1);
-  const layer2Boxes = evaluation.placements.filter((b) => b.layer === 2);
+  const placements = Array.isArray(evaluation?.placements) ? evaluation.placements : [];
+  const layer1Boxes = placements.filter((b) => b.layer === 1);
+  const layer2Boxes = placements.filter((b) => b.layer === 2);
   const hasLayer2 = layer2Boxes.length > 0;
 
   // Panel X positions
@@ -1180,6 +1181,58 @@ function buildExportBaseFilename(projectOrClientName?: string): string {
   return clean ? `DieCutRoom-PalletVector-${clean}` : `DieCutRoom-PalletVector`;
 }
 
+const VECTOR_SCENE_CACHE = new Map<string, PalletVectorScene>();
+const VECTOR_SCENE_CACHE_MAX = 12;
+
+export function getPalletVectorSceneCacheKey(
+  pallet: PalletConfig,
+  evaluation: PalletPatternEvaluation,
+  options: PalletVectorExportOptions
+): string {
+  const first = evaluation.placements?.[0];
+  const last = evaluation.placements?.[evaluation.placements.length - 1];
+  return [
+    pallet.palletLengthMm,
+    pallet.palletWidthMm,
+    pallet.palletHeightMm,
+    evaluation.patternType,
+    evaluation.casesPerLayer,
+    evaluation.layerCount,
+    evaluation.totalCases,
+    evaluation.placements?.length ?? 0,
+    first ? `${Math.round(first.x)}:${Math.round(first.z)}:${Math.round(first.sizeX)}:${Math.round(first.sizeZ)}` : '',
+    last ? `${Math.round(last.x)}:${Math.round(last.y)}:${Math.round(last.z)}` : '',
+    options.includeFramesAndText ? 1 : 0,
+    options.includeMaxStackPanel ? 1 : 0,
+    options.strokePreset,
+  ].join('|');
+}
+
+export function getCachedPalletVectorScene(key: string): PalletVectorScene | null {
+  return VECTOR_SCENE_CACHE.get(key) ?? null;
+}
+
+export function buildPalletVectorSceneCached(
+  pallet: PalletConfig,
+  evaluation: PalletPatternEvaluation,
+  options: PalletVectorExportOptions
+): PalletVectorScene {
+  const key = getPalletVectorSceneCacheKey(pallet, evaluation, options);
+  const cached = VECTOR_SCENE_CACHE.get(key);
+  if (cached) {
+    VECTOR_SCENE_CACHE.delete(key);
+    VECTOR_SCENE_CACHE.set(key, cached);
+    return cached;
+  }
+  const scene = buildPalletVectorScene(pallet, evaluation, options);
+  VECTOR_SCENE_CACHE.set(key, scene);
+  if (VECTOR_SCENE_CACHE.size > VECTOR_SCENE_CACHE_MAX) {
+    const oldest = VECTOR_SCENE_CACHE.keys().next().value;
+    if (oldest !== undefined) VECTOR_SCENE_CACHE.delete(oldest);
+  }
+  return scene;
+}
+
 /**
  * Triggers browser download of the Adobe Illustrator-ready transparent SVG file.
  */
@@ -1188,7 +1241,7 @@ export function downloadPalletVectorSvg(
   evaluation: PalletPatternEvaluation,
   options: PalletVectorExportOptions
 ): void {
-  const scene = buildPalletVectorScene(pallet, evaluation, options);
+  const scene = buildPalletVectorSceneCached(pallet, evaluation, options);
   const svgStr = serializePalletVectorToSvg(scene);
   const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);

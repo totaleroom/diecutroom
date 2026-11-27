@@ -427,7 +427,7 @@ export default function InteractiveMatrixCanvas() {
     const CYCLE_PER_FORM_SEC = 5.4;
     let width = window.innerWidth;
     let height = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, profile.matrixMaxDpr);
+    let dpr = Math.min(window.devicePixelRatio || 1, profile.matrixMaxDpr, 1.5);
     let cols = 0;
     let rows = 0;
     let cells: CellState[] = [];
@@ -447,7 +447,7 @@ export default function InteractiveMatrixCanvas() {
     const rebuildGrid = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, profile.matrixMaxDpr);
+      dpr = Math.min(window.devicePixelRatio || 1, profile.matrixMaxDpr, 1.5);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
@@ -468,8 +468,6 @@ export default function InteractiveMatrixCanvas() {
         }
       }
     };
-
-    rebuildGrid();
 
     const updatePointerCoords = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
@@ -530,9 +528,21 @@ export default function InteractiveMatrixCanvas() {
     document.addEventListener('mouseleave', onDocumentMouseLeave);
 
     let rafId = 0;
+    let lastDrawTs = 0;
+    let gridReady = false;
     const motionScale = prefersReduced ? 0.5 : 1.0;
 
     const renderFrame = (now: number) => {
+      if (!gridReady) {
+        rebuildGrid();
+        gridReady = true;
+      }
+      // Pace idle ambient animation to ~30fps while keeping pointer/ripple interactions at full 60fps
+      if (!pointer.active && ripples.length === 0 && lastDrawTs > 0 && now - lastDrawTs < 32) {
+        rafId = window.requestAnimationFrame(renderFrame);
+        return;
+      }
+      lastDrawTs = now;
       const t = now * 0.001 * motionScale;
 
       if (pointer.active && pointer.prevX > -5000) {

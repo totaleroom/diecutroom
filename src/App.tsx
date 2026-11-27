@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Monitor,
   Box as BoxIcon,
@@ -25,9 +25,6 @@ import {
   FileCode2,
   PenTool,
 } from 'lucide-react';
-import Sidebar from './components/Sidebar';
-import BoxPreview from './components/BoxPreview';
-import BCTInspectorRail from './components/BCTInspectorRail';
 import AuthGate from './components/AuthGate';
 import MobileGenieSheet from './components/MobileGenieSheet';
 import {
@@ -42,6 +39,9 @@ import { scheduleIdleWork } from './utils/browserEngine';
 import { authFetch, clearClientSessionToken } from './utils/apiSession';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
+const Sidebar = lazyWithRetry(() => import('./components/Sidebar'));
+const BoxPreview = lazyWithRetry(() => import('./components/BoxPreview'));
+const BCTInspectorRail = lazyWithRetry(() => import('./components/BCTInspectorRail'));
 const Box3DViewer = lazyWithRetry(() => import('./components/Box3DViewer'));
 const PalletizerWorkspace = lazyWithRetry(() => import('./components/PalletizerWorkspace'));
 const EngineeringSheet = lazyWithRetry(() => import('./components/EngineeringSheet'));
@@ -51,6 +51,7 @@ import {
   AuthUser,
   BoxConfig,
   BOX_STYLES,
+  DEFAULT_ARTWORK_2D_CONFIG,
   DEFAULT_CASE_PACK_CONFIG,
   DEFAULT_PALLET_CONFIG,
   ExportMode,
@@ -73,6 +74,11 @@ export default function App() {
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
 
   const [viewMode, setViewMode] = useState<ViewMode>('2d');
+  const [visitedTabs, setVisitedTabs] = useState<Record<ViewMode, boolean>>({
+    '2d': true,
+    '3d': false,
+    pallet: false,
+  });
   const [exportMode, setExportMode] = useState<ExportMode>('spec-sheet');
   const [engineeringSheetOpen, setEngineeringSheetOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -118,6 +124,7 @@ export default function App() {
     scoreSafeZone: true,
     glueKnockout: false,
     fluteDirection: true,
+    artwork: true,
   });
 
   const [config, setConfig] = useState<BoxConfig>({
@@ -205,6 +212,7 @@ export default function App() {
     },
     casePack: DEFAULT_CASE_PACK_CONFIG,
     pallet: DEFAULT_PALLET_CONFIG,
+    artwork: DEFAULT_ARTWORK_2D_CONFIG,
   });
 
   // Verify existing HTTP-only session cookie with VPS backend
@@ -252,6 +260,21 @@ export default function App() {
       controller.abort();
     };
   }, []);
+
+  // Track visited tabs so 3D Fit & Palletizer stay warm (keep-alive) once opened
+  useEffect(() => {
+    setVisitedTabs((prev) => (prev[viewMode] ? prev : { ...prev, [viewMode]: true }));
+  }, [viewMode]);
+
+  // Background-prefetch core workspace chunks while user is on AuthGate
+  useEffect(() => {
+    if (authChecking || authUser) return;
+    return scheduleIdleWork(() => {
+      void import('./components/Sidebar');
+      void import('./components/BoxPreview');
+      void import('./components/BCTInspectorRail');
+    }, 1200);
+  }, [authChecking, authUser]);
 
   // Background-prefetch 3D & Palletizer modules when browser is idle after auth
   useEffect(() => {
@@ -363,15 +386,55 @@ export default function App() {
     setStatusNotice(null);
     setAdminModalOpen(false);
     setProjectsModalOpen(false);
+    setViewMode('2d');
+    setVisitedTabs({ '2d': true, '3d': false, pallet: false });
   };
 
   const paths = useMemo(() => generateRSCDieline(config), [config]);
   const analysis = useMemo(() => computeEngineeringAnalysis(config, paths), [config, paths]);
   const activeStyle = BOX_STYLES.find((s) => s.id === config.boxStyle) || BOX_STYLES[0];
 
-  const handleToggleLayer = (layer: keyof LayerVisibility) => {
+  const handleToggleLayer = useCallback((layer: keyof LayerVisibility) => {
     setLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
-  };
+  }, []);
+
+  const handleOpenEngineering = useCallback(() => {
+    setEngineeringSheetOpen(true);
+  }, []);
+
+  const handleOpenEngineeringFromSpecs = useCallback(() => {
+    setSpecsOpen(false);
+    setEngineeringSheetOpen(true);
+  }, [setSpecsOpen]);
+
+  const handleOpenEngineeringFromBct = useCallback(() => {
+    setBctOpen(false);
+    setEngineeringSheetOpen(true);
+  }, [setBctOpen]);
+
+  const handleCloseSpecs = useCallback(() => {
+    setSpecsOpen(false);
+  }, [setSpecsOpen]);
+
+  const handleCloseBct = useCallback(() => {
+    setBctOpen(false);
+  }, [setBctOpen]);
+
+  const handleClosePalletConfig = useCallback(() => {
+    setPalletConfigOpen(false);
+  }, [setPalletConfigOpen]);
+
+  const handleClearPdfTrigger = useCallback(() => {
+    setDielinePdfTrigger(0);
+  }, []);
+
+  const handleClearSvgTrigger = useCallback(() => {
+    setDielineSvgTrigger(0);
+  }, []);
+
+  const handleHandledPalletExport = useCallback(() => {
+    setPalletExportTabRequest(null);
+  }, []);
 
   if (authChecking) {
     return (
@@ -463,37 +526,42 @@ export default function App() {
             side="left"
             dockOrigin="left"
             ariaLabel="Panel Spesifikasi DieCut"
-            onClose={() => setSpecsOpen(false)}
+            onClose={handleCloseSpecs}
           >
             {({ isCenteredMobile }) => (
+              <Suspense fallback={null}>
+                <Sidebar
+                  config={config}
+                  paths={paths}
+                  analysis={analysis}
+                  onChange={setConfig}
+                  onOpenEngineering={handleOpenEngineeringFromSpecs}
+                  onClose={handleCloseSpecs}
+                  className={
+                    isCenteredMobile
+                      ? '!w-full !h-full !border-r-0'
+                      : 'relative z-10 shadow-[var(--shadow-modal)]'
+                  }
+                />
+              </Suspense>
+            )}
+          </MobileGenieSheet>
+        ) : (
+          specsOpen && (
+            <Suspense
+              fallback={
+                <div className="w-[300px] shrink-0 border-r-[0.5px] border-[var(--line)] bg-[var(--surface-top)]" />
+              }
+            >
               <Sidebar
                 config={config}
                 paths={paths}
                 analysis={analysis}
                 onChange={setConfig}
-                onOpenEngineering={() => {
-                  setSpecsOpen(false);
-                  setEngineeringSheetOpen(true);
-                }}
-                onClose={() => setSpecsOpen(false)}
-                className={
-                  isCenteredMobile
-                    ? '!w-full !h-full !border-r-0'
-                    : 'relative z-10 shadow-[var(--shadow-modal)]'
-                }
+                onOpenEngineering={handleOpenEngineering}
+                onClose={handleCloseSpecs}
               />
-            )}
-          </MobileGenieSheet>
-        ) : (
-          specsOpen && (
-            <Sidebar
-              config={config}
-              paths={paths}
-              analysis={analysis}
-              onChange={setConfig}
-              onOpenEngineering={() => setEngineeringSheetOpen(true)}
-              onClose={() => setSpecsOpen(false)}
-            />
+            </Suspense>
           )
         ))}
 
@@ -932,57 +1000,100 @@ export default function App() {
             </button>
           )}
 
-          {viewMode === '2d' ? (
-            <BoxPreview
-              paths={paths}
-              config={config}
-              analysis={analysis}
-              layers={layers}
-              onToggleLayer={handleToggleLayer}
-              exportMode={exportMode}
-              onChangeExportMode={setExportMode}
-              hasMobileFloatingDock={showMobileBottomDock}
-              focusMode={focusMode}
-              pdfExportTrigger={dielinePdfTrigger}
-              onPdfExportTriggered={() => setDielinePdfTrigger(0)}
-              svgExportTrigger={dielineSvgTrigger}
-              onSvgExportTriggered={() => setDielineSvgTrigger(0)}
-              onExportingPdfChange={setDielineExportingPdf}
-            />
-          ) : (
+          <div
+            className={
+              viewMode === '2d'
+                ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
+                : 'hidden'
+            }
+          >
             <Suspense
               fallback={
                 <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
-                  Menyiapkan engine 3D WebGL...
+                  Menyiapkan kanvas 2D CAD...
                 </div>
               }
             >
-              {viewMode === '3d' ? (
+              <BoxPreview
+                paths={paths}
+                config={config}
+                analysis={analysis}
+                layers={layers}
+                onToggleLayer={handleToggleLayer}
+                onChangeConfig={setConfig}
+                exportMode={exportMode}
+                onChangeExportMode={setExportMode}
+                hasMobileFloatingDock={showMobileBottomDock}
+                focusMode={focusMode}
+                pdfExportTrigger={dielinePdfTrigger}
+                onPdfExportTriggered={handleClearPdfTrigger}
+                svgExportTrigger={dielineSvgTrigger}
+                onSvgExportTriggered={handleClearSvgTrigger}
+                onExportingPdfChange={setDielineExportingPdf}
+              />
+            </Suspense>
+          </div>
+
+          {visitedTabs['3d'] && (
+            <div
+              className={
+                viewMode === '3d'
+                  ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
+                  : 'hidden'
+              }
+            >
+              <Suspense
+                fallback={
+                  <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
+                    Menyiapkan engine 3D WebGL...
+                  </div>
+                }
+              >
                 <Box3DViewer
                   config={config}
                   paths={paths}
                   hasMobileFloatingDock={showMobileBottomDock}
                   isShortLandscape={isShortLandscape}
                   focusMode={focusMode}
+                  isActive={viewMode === '3d'}
                 />
-              ) : (
+              </Suspense>
+            </div>
+          )}
+
+          {visitedTabs.pallet && (
+            <div
+              className={
+                viewMode === 'pallet'
+                  ? 'flex-1 flex flex-col min-h-0 overflow-hidden'
+                  : 'hidden'
+              }
+            >
+              <Suspense
+                fallback={
+                  <div className="flex-1 flex items-center justify-center bg-[var(--ground)] text-[12px] text-[var(--ink-10)]">
+                    Menyiapkan engine 3D WebGL...
+                  </div>
+                }
+              >
                 <PalletizerWorkspace
                   config={config}
                   paths={paths}
                   analysis={analysis}
                   onChange={setConfig}
-                  onOpenEngineering={() => setEngineeringSheetOpen(true)}
+                  onOpenEngineering={handleOpenEngineering}
                   railOpen={palletConfigOpen && !focusMode}
                   isOverlayRail={isLeftOverlay}
-                  onCloseRail={() => setPalletConfigOpen(false)}
+                  onCloseRail={handleClosePalletConfig}
                   hasMobileFloatingDock={showMobileBottomDock}
                   isShortLandscape={isShortLandscape}
                   focusMode={focusMode}
                   requestedExportTab={palletExportTabRequest}
-                  onHandledExportRequest={() => setPalletExportTabRequest(null)}
+                  onHandledExportRequest={handleHandledPalletExport}
+                  isActive={viewMode === 'pallet'}
                 />
-              )}
-            </Suspense>
+              </Suspense>
+            </div>
           )}
         </div>
 
@@ -1047,39 +1158,44 @@ export default function App() {
             side="right"
             dockOrigin="center"
             ariaLabel="Panel BCT Pro"
-            onClose={() => setBctOpen(false)}
+            onClose={handleCloseBct}
           >
             {({ isCenteredMobile }) => (
+              <Suspense fallback={null}>
+                <BCTInspectorRail
+                  config={config}
+                  paths={paths}
+                  analysis={analysis}
+                  userId={authUser.id}
+                  onChange={setConfig}
+                  onOpenEngineeringSheet={handleOpenEngineeringFromBct}
+                  onClose={handleCloseBct}
+                  className={
+                    isCenteredMobile
+                      ? '!w-full !h-full !border-l-0'
+                      : 'relative z-10 shadow-[var(--shadow-modal)]'
+                  }
+                />
+              </Suspense>
+            )}
+          </MobileGenieSheet>
+        ) : (
+          bctOpen && (
+            <Suspense
+              fallback={
+                <div className="w-[300px] shrink-0 border-l-[0.5px] border-[var(--line)] bg-[var(--surface-top)]" />
+              }
+            >
               <BCTInspectorRail
                 config={config}
                 paths={paths}
                 analysis={analysis}
                 userId={authUser.id}
                 onChange={setConfig}
-                onOpenEngineeringSheet={() => {
-                  setBctOpen(false);
-                  setEngineeringSheetOpen(true);
-                }}
-                onClose={() => setBctOpen(false)}
-                className={
-                  isCenteredMobile
-                    ? '!w-full !h-full !border-l-0'
-                    : 'relative z-10 shadow-[var(--shadow-modal)]'
-                }
+                onOpenEngineeringSheet={handleOpenEngineering}
+                onClose={handleCloseBct}
               />
-            )}
-          </MobileGenieSheet>
-        ) : (
-          bctOpen && (
-            <BCTInspectorRail
-              config={config}
-              paths={paths}
-              analysis={analysis}
-              userId={authUser.id}
-              onChange={setConfig}
-              onOpenEngineeringSheet={() => setEngineeringSheetOpen(true)}
-              onClose={() => setBctOpen(false)}
-            />
+            </Suspense>
           )
         ))}
 

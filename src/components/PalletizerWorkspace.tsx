@@ -57,18 +57,22 @@ import {
   getEffectiveProductNetWeightKg,
 } from '../utils/engineering';
 import {
+  buildSmartPalletAdvisorFromEvals,
   computeEffectivePalletDims,
   computePerfectionistTuningReport,
-  computeSmartPalletAdvisor,
-  evaluateAllPalletPatterns,
+  evaluateAllPalletPatternsCached,
   normalizePalletEdgeMarginMm,
   PalletPhysicsContext,
   pickOptimalPatternType,
 } from '../utils/palletizer';
-import { getEngineProfile, createDynamicResolutionController } from '../utils/browserEngine';
+import {
+  getEngineProfile,
+  createDynamicResolutionController,
+  scheduleIdleWork,
+} from '../utils/browserEngine';
 import { exportPalletizerReportPdf } from '../utils/palletizerReportPdf';
 import {
-  buildPalletVectorScene,
+  buildPalletVectorSceneCached,
   downloadPalletVectorSvg,
   exportPalletVectorPdf,
   VECTOR_STROKE_PRESETS,
@@ -161,6 +165,7 @@ interface PalletizerWorkspaceProps {
   focusMode?: boolean;
   requestedExportTab?: 'engineering' | 'vector' | null;
   onHandledExportRequest?: () => void;
+  isActive?: boolean;
 }
 
 type LeftRailTab = 'pallet' | 'vehicle';
@@ -263,13 +268,36 @@ function disposeGroupResources(root: THREE.Object3D) {
   });
 }
 
+const _heatC0 = new THREE.Color('#16A34A'); // 0% (top / 1-layer, no load above)
+const _heatC1 = new THREE.Color('#84CC16'); // ~45% safe
+const _heatC2 = new THREE.Color('#EAB308'); // ~78% caution
+const _heatC3 = new THREE.Color('#F97316'); // ~100% boundary
+const _heatC4 = new THREE.Color('#EF4444'); // >100% overload
+const _heatC5 = new THREE.Color('#B91C1C'); // >=140% severe overload
+const _heatOut = new THREE.Color();
+
+function computeHeatmapStressHex(stressRatio: number): string {
+  const r = Math.max(0, Number.isFinite(stressRatio) ? stressRatio : 0);
+  if (r <= 0.001) return '#16A34A';
+  if (r <= 0.45) {
+    _heatOut.copy(_heatC0).lerp(_heatC1, r / 0.45);
+  } else if (r <= 0.78) {
+    _heatOut.copy(_heatC1).lerp(_heatC2, (r - 0.45) / 0.33);
+  } else if (r <= 1.0) {
+    _heatOut.copy(_heatC2).lerp(_heatC3, (r - 0.78) / 0.22);
+  } else {
+    const t = Math.min(1, (r - 1.0) / 0.4);
+    _heatOut.copy(_heatC4).lerp(_heatC5, t);
+  }
+  return `#${_heatOut.getHexString()}`;
+}
+
 interface PopulatePalletGroupParams {
   group: THREE.Group;
   pallet: PalletConfig;
   activeEvaluation: PalletPatternEvaluation;
   outerDimensions: { length: number; width: number; depth: number };
   materialColor: 'kraft' | 'white';
-  inspectLayer: number | null;
   safetyFactor: number;
   caseGrossKg: number;
   viewOverlayMode: PalletViewOverlayMode;
@@ -283,7 +311,6 @@ function populatePalletGroup({
   activeEvaluation,
   outerDimensions,
   materialColor,
-  inspectLayer,
   safetyFactor,
   caseGrossKg,
   viewOverlayMode,
@@ -417,9 +444,9 @@ function populatePalletGroup({
     group.add(slip);
   }
 
-  // 4. Filter visible placements by inspectLayer
-  const maxVisibleLayer = inspectLayer ?? activeEvaluation.layerCount;
-  const visiblePlacements = activeEvaluation.placements.filter((b) => b.layer <= maxVisibleLayer);
+  // 4. Render all active stack layers (single source of truth synced with layer slider)
+  const maxVisibleLayer = activeEvaluation.layerCount;
+  const visiblePlacements = activeEvaluation.placements;
 
   if (visiblePlacements.length > 0) {
     const isHeatmap = viewOverlayMode === 'lock-heatmap';
@@ -470,16 +497,11 @@ function populatePalletGroup({
       instanced.setMatrixAt(idx, _dummyObj.matrix);
 
       if (isHeatmap) {
+        // Pure compressive-load Heat-Map: top layer = 0% (Green), cumulative weight below = smooth gradient to Red (>100%)
         const layersAbove = Math.max(0, activeEvaluation.layerCount - b.layer);
         const loadAboveKgf = layersAbove * caseGrossKg;
         const stressRatio = loadAboveKgf / allowablePerBoxKgf;
-        if (stressRatio > 1.0 || b.lockStatus === 'at-risk') {
-          _tmpColor.set('#EF4444');
-        } else if (stressRatio >= 0.72 || b.lockStatus === 'column') {
-          _tmpColor.set('#F59E0B');
-        } else {
-          _tmpColor.set('#22C55E');
-        }
+        _tmpColor.set(computeHeatmapStressHex(stressRatio));
       } else if (orientationContrast) {
         const layerOdd = b.layer % 2 === 1;
         _tmpColor.set(
@@ -674,9 +696,9 @@ function populatePalletGroup({
       }
     }
 
-    // 8. 3D Unbridged Cleavage Fault-Line Warning Planes
+    // 8. 3D Unbridged Cleavage Fault-Line Warning Planes (normal mode only; keep Heat-Map strictly compressive-stress)
     const faultLines = activeEvaluation.stability?.faultLines || [];
-    if (faultLines.length > 0 && (isHeatmap || faultLines.some((fl) => fl.severity === 'critical'))) {
+    if (!isHeatmap && faultLines.some((fl) => fl.severity === 'critical')) {
       const slipH = pallet.useSlipSheet ? 0.002 : 0;
       const tierPadM = pallet.useTierSheets ? Math.max(0.001, pallet.tierSheetThicknessMm * S) : 0;
       const visH = Math.max(
@@ -687,13 +709,12 @@ function populatePalletGroup({
       const spanW = Math.max(pW, activeEvaluation.footprintW * S) + 0.03;
 
       faultLines.forEach((fl) => {
-        const isCrit = fl.severity === 'critical';
-        if (!isHeatmap && !isCrit) return;
+        if (fl.severity !== 'critical') return;
         const planeMat = new THREE.MeshBasicMaterial({
-          color: isCrit ? '#DC2626' : '#F59E0B',
+          color: '#DC2626',
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: isHeatmap ? (isCrit ? 0.24 : 0.16) : 0.11,
+          opacity: 0.11,
           depthWrite: false,
         });
         const planeGeo =
@@ -707,54 +728,6 @@ function populatePalletGroup({
         }
         group.add(planeMesh);
       });
-    }
-
-    // 9. 3D Unsupported Corner Markers in Heat-Map Mode
-    if (isHeatmap) {
-      const markerPts: Array<{ x: number; y: number; z: number }> = [];
-      for (const b of visiblePlacements) {
-        if (b.layer <= 1 || !b.unsupportedCornerCoords?.length) continue;
-        const yTopM = (b.y + b.sizeY) * S;
-        for (const [ux, uz] of b.unsupportedCornerCoords) {
-          markerPts.push({ x: ux * S, y: yTopM, z: uz * S });
-        }
-      }
-
-      if (markerPts.length > 0) {
-        const haloGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.004, 14);
-        const haloMat = new THREE.MeshStandardMaterial({
-          color: '#EA580C',
-          emissive: '#C2410C',
-          emissiveIntensity: 0.45,
-          roughness: 0.35,
-        });
-        const haloInst = new THREE.InstancedMesh(haloGeo, haloMat, markerPts.length);
-
-        const pinGeo = new THREE.CylinderGeometry(0.004, 0.008, 0.026, 8);
-        const pinMat = new THREE.MeshStandardMaterial({
-          color: '#DC2626',
-          emissive: '#991B1B',
-          emissiveIntensity: 0.4,
-          roughness: 0.3,
-        });
-        const pinInst = new THREE.InstancedMesh(pinGeo, pinMat, markerPts.length);
-
-        markerPts.forEach((pt, i) => {
-          _dummyObj.position.set(pt.x, pt.y + 0.002, pt.z);
-          _dummyObj.rotation.set(0, 0, 0);
-          _dummyObj.scale.set(1, 1, 1);
-          _dummyObj.updateMatrix();
-          haloInst.setMatrixAt(i, _dummyObj.matrix);
-
-          _dummyObj.position.set(pt.x, pt.y + 0.015, pt.z);
-          _dummyObj.updateMatrix();
-          pinInst.setMatrixAt(i, _dummyObj.matrix);
-        });
-
-        haloInst.instanceMatrix.needsUpdate = true;
-        pinInst.instanceMatrix.needsUpdate = true;
-        group.add(haloInst, pinInst);
-      }
     }
   }
 }
@@ -895,6 +868,7 @@ export default function PalletizerWorkspace({
   focusMode = false,
   requestedExportTab = null,
   onHandledExportRequest,
+  isActive = true,
 }: PalletizerWorkspaceProps) {
   const casePack: CasePackConfig = config.casePack || DEFAULT_CASE_PACK_CONFIG;
   const rawPallet: PalletConfig = config.pallet || DEFAULT_PALLET_CONFIG;
@@ -910,7 +884,6 @@ export default function PalletizerWorkspace({
   const [railTab, setRailTab] = useState<LeftRailTab>('pallet');
   const [canvasViewMode, setCanvasViewMode] = useState<CanvasViewMode>('3d');
   const [appliedBanner, setAppliedBanner] = useState<string | null>(null);
-  const [inspectLayer, setInspectLayer] = useState<number | null>(null); // null = all layers
   const [viewOverlayMode, setViewOverlayMode] = useState<PalletViewOverlayMode>('normal');
   const [activeCamPreset, setActiveCamPreset] = useState<CameraPreset>('iso');
   const [showAllCandidates, setShowAllCandidates] = useState(false);
@@ -956,13 +929,13 @@ export default function PalletizerWorkspace({
     [config.engineering, config.boardGrade, config.fluteThickness, config.boxStyle]
   );
 
-  // Run initial evaluation once, then offload heavy multi-candidate TOPS & Perfectionist solving to Web Worker
+  // Fast initial pattern evaluation (<15ms / cache hit <0.1ms); heavy Perfectionist sweep runs 100% off-thread in Web Worker
   const [solverResult, setSolverResult] = useState<{
     patternEvaluations: PalletPatternEvaluation[];
     smartAdvisor: SmartPalletAdvisorResult;
     tuningReport: PerfectionistTuningReport;
-  }>(() => ({
-    patternEvaluations: evaluateAllPalletPatterns(
+  }>(() => {
+    const initialPatterns = evaluateAllPalletPatternsCached(
       pallet,
       paths.info.outerDimensions,
       syncedCaseGrossKg,
@@ -970,45 +943,42 @@ export default function PalletizerWorkspace({
       config.engineering.safetyFactor,
       casePack.unitsPerCase || 1,
       physicsCtx
-    ),
-    smartAdvisor: computeSmartPalletAdvisor(
-      pallet,
-      paths.info.outerDimensions,
-      syncedCaseGrossKg,
-      analysis.correctedBctKgf,
-      config.engineering.safetyFactor,
-      casePack.unitsPerCase || 1,
-      physicsCtx
-    ),
-    tuningReport: computePerfectionistTuningReport(
-      paths.info.innerDimensions,
-      pallet,
-      syncedCaseGrossKg,
-      analysis.correctedBctKgf,
-      config.engineering.safetyFactor,
-      casePack.unitsPerCase || 1,
-      physicsCtx
-    ),
-  }));
+    );
+    const initialAdvisor = buildSmartPalletAdvisorFromEvals(initialPatterns);
+    const baselinePattern = pickOptimalPatternType(
+      initialPatterns,
+      pallet.recommendationMode || 'smart'
+    );
+    const baselineEval =
+      initialPatterns.find((e) => e.patternType === baselinePattern) || initialPatterns[0];
+    return {
+      patternEvaluations: initialPatterns,
+      smartAdvisor: initialAdvisor,
+      tuningReport: {
+        baselineEval,
+        baselineInner: paths.info.innerDimensions,
+        baselineOuter: paths.info.outerDimensions,
+        micro5mm: null,
+        sweetSpot20mm: null,
+        density20mm: null,
+        boardAdvice: null,
+      },
+    };
+  });
 
   const solverWorkerRef = useRef<Worker | null>(null);
   const workerReqIdRef = useRef(0);
-  const solverMountedRef = useRef(false);
-
-  const runSyncSolve = (
-    p: PalletConfig,
-    outerD: typeof paths.info.outerDimensions,
-    innerD: typeof paths.info.innerDimensions,
-    grossKg: number,
-    bctKgf: number,
-    sf: number,
-    upc: number,
-    phys: PalletPhysicsContext
-  ) => ({
-    patternEvaluations: evaluateAllPalletPatterns(p, outerD, grossKg, bctKgf, sf, upc, phys),
-    smartAdvisor: computeSmartPalletAdvisor(p, outerD, grossKg, bctKgf, sf, upc, phys),
-    tuningReport: computePerfectionistTuningReport(innerD, p, grossKg, bctKgf, sf, upc, phys),
-  });
+  const solverDirtyRef = useRef(true);
+  const lastSolverDepsRef = useRef<{
+    pallet: PalletConfig;
+    outerDimensions: BoxConfig['dimensions'];
+    innerDimensions: BoxConfig['dimensions'];
+    syncedCaseGrossKg: number;
+    correctedBctKgf: number;
+    safetyFactor: number;
+    unitsPerCase: number;
+    physicsCtx: PalletPhysicsContext;
+  } | null>(null);
 
   useEffect(() => {
     if (typeof Worker === 'undefined') return;
@@ -1038,26 +1008,84 @@ export default function PalletizerWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!solverMountedRef.current) {
-      solverMountedRef.current = true;
+    const unitsPerCase = casePack.unitsPerCase || 1;
+    const prev = lastSolverDepsRef.current;
+    const changed =
+      !prev ||
+      prev.pallet !== pallet ||
+      prev.outerDimensions !== paths.info.outerDimensions ||
+      prev.innerDimensions !== paths.info.innerDimensions ||
+      prev.syncedCaseGrossKg !== syncedCaseGrossKg ||
+      prev.correctedBctKgf !== analysis.correctedBctKgf ||
+      prev.safetyFactor !== config.engineering.safetyFactor ||
+      prev.unitsPerCase !== unitsPerCase ||
+      prev.physicsCtx !== physicsCtx;
+
+    if (!isActive) {
+      if (changed) solverDirtyRef.current = true;
       return;
     }
-    const unitsPerCase = casePack.unitsPerCase || 1;
+    if (!changed && !solverDirtyRef.current) return;
+
+    solverDirtyRef.current = false;
+    lastSolverDepsRef.current = {
+      pallet,
+      outerDimensions: paths.info.outerDimensions,
+      innerDimensions: paths.info.innerDimensions,
+      syncedCaseGrossKg,
+      correctedBctKgf: analysis.correctedBctKgf,
+      safetyFactor: config.engineering.safetyFactor,
+      unitsPerCase,
+      physicsCtx,
+    };
+
+    const immediatePatterns = evaluateAllPalletPatternsCached(
+      pallet,
+      paths.info.outerDimensions,
+      syncedCaseGrossKg,
+      analysis.correctedBctKgf,
+      config.engineering.safetyFactor,
+      unitsPerCase,
+      physicsCtx
+    );
+    const immediateAdvisor = buildSmartPalletAdvisorFromEvals(immediatePatterns);
+
+    setSolverResult((prevResult) =>
+      prevResult.patternEvaluations === immediatePatterns
+        ? prevResult
+        : {
+            ...prevResult,
+            patternEvaluations: immediatePatterns,
+            smartAdvisor: immediateAdvisor,
+          }
+    );
+
     const worker = solverWorkerRef.current;
     if (!worker) {
-      setSolverResult(
-        runSyncSolve(
-          pallet,
-          paths.info.outerDimensions,
+      let cancelled = false;
+      const cancelIdle = scheduleIdleWork(() => {
+        if (cancelled) return;
+        const tuningReport = computePerfectionistTuningReport(
           paths.info.innerDimensions,
+          pallet,
           syncedCaseGrossKg,
           analysis.correctedBctKgf,
           config.engineering.safetyFactor,
           unitsPerCase,
           physicsCtx
-        )
-      );
-      return;
+        );
+        if (!cancelled) {
+          setSolverResult({
+            patternEvaluations: immediatePatterns,
+            smartAdvisor: immediateAdvisor,
+            tuningReport,
+          });
+        }
+      }, 600);
+      return () => {
+        cancelled = true;
+        cancelIdle();
+      };
     }
 
     const requestId = ++workerReqIdRef.current;
@@ -1074,6 +1102,7 @@ export default function PalletizerWorkspace({
     };
     worker.postMessage(payload);
   }, [
+    isActive,
     pallet,
     paths.info.outerDimensions,
     paths.info.innerDimensions,
@@ -1102,12 +1131,61 @@ export default function PalletizerWorkspace({
     [patternEvaluations, effectivePatternType]
   );
 
-  // Reset inspect layer if active layers shrink
-  useEffect(() => {
-    if (inspectLayer !== null && inspectLayer > activeEvaluation.layerCount) {
-      setInspectLayer(null);
+  // Unified real-time layer count state (shared 1:1 between Left Rail & Bottom HUD)
+  const autoMaxLayers = Math.max(
+    1,
+    Math.min(
+      activeEvaluation.layerBreakdown.maxByHeight,
+      activeEvaluation.layerBreakdown.maxByWeight
+    )
+  );
+  const maxLayerSlider = Math.min(20, Math.max(autoMaxLayers, 16));
+  const isManualLayers = pallet.manualLayerCount !== null;
+  const currentLayerCount = isManualLayers
+    ? Math.max(1, Math.min(20, Math.round(pallet.manualLayerCount as number)))
+    : activeEvaluation.layerCount;
+
+  // Per-layer compressive stress percentage profile (drives Heat-Map HUD legend & matches 3D mesh colors 1:1)
+  const allowablePerBoxKgf = Math.max(
+    0.5,
+    activeEvaluation.effectivePalletBctKgf / Math.max(1, config.engineering.safetyFactor)
+  );
+  const layerStressProfile = useMemo(() => {
+    const n = Math.max(1, activeEvaluation.layerCount);
+    const rows: Array<{
+      layer: number;
+      loadAboveKg: number;
+      stressPct: number;
+      hexColor: string;
+    }> = [];
+    for (let k = 1; k <= n; k++) {
+      const layersAbove = Math.max(0, n - k);
+      const loadAboveKg = Math.round(layersAbove * syncedCaseGrossKg * 10) / 10;
+      const ratio = loadAboveKg / allowablePerBoxKgf;
+      rows.push({
+        layer: k,
+        loadAboveKg,
+        stressPct: Math.round(ratio * 100),
+        hexColor: computeHeatmapStressHex(ratio),
+      });
     }
-  }, [inspectLayer, activeEvaluation.layerCount]);
+    return rows;
+  }, [activeEvaluation.layerCount, syncedCaseGrossKg, allowablePerBoxKgf]);
+
+  const displayedStressTicks = useMemo(() => {
+    const total = layerStressProfile.length;
+    if (total <= 10) return layerStressProfile;
+    const pickedIndices = new Set<number>([
+      0,
+      1,
+      Math.round((total - 1) * 0.25),
+      Math.round((total - 1) * 0.5),
+      Math.round((total - 1) * 0.75),
+      total - 2,
+      total - 1,
+    ]);
+    return layerStressProfile.filter((_, idx) => pickedIndices.has(idx));
+  }, [layerStressProfile]);
 
   // Helper for updating Pallet config inside BoxConfig
   const updatePallet = (patch: Partial<PalletConfig>) => {
@@ -1115,6 +1193,11 @@ export default function PalletizerWorkspace({
       ...prev,
       pallet: { ...(prev.pallet || DEFAULT_PALLET_CONFIG), ...patch },
     }));
+  };
+
+  const handleLayerCountChange = (nextLayers: number) => {
+    const clamped = Math.max(1, Math.min(20, Math.round(nextLayers)));
+    updatePallet({ manualLayerCount: clamped });
   };
 
   // Indonesian Vehicle & Container Config + Auto Pallet Height Synchronization
@@ -1341,9 +1424,31 @@ export default function PalletizerWorkspace({
     target: new THREE.Vector3(0, 0.55, 0),
   });
 
+  const isActiveRef = useRef(isActive);
+  const resizeRendererRef = useRef<() => void>(() => {});
+  const sceneDirtyRef = useRef(false);
+  const lastSceneDepsRef = useRef<{
+    pallet: PalletConfig;
+    activeEvaluation: PalletPatternEvaluation;
+    safetyFactor: number;
+    syncedCaseGrossKg: number;
+    viewOverlayMode: PalletViewOverlayMode;
+    materialColor: string;
+    outerDimensions: BoxConfig['dimensions'];
+  } | null>(null);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    if (isActive) {
+      resizeRendererRef.current();
+      requestRenderRef.current();
+    }
+  }, [isActive]);
+
   // Keyboard shortcut 'H' for bottom dock
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!isActiveRef.current) return;
       if (e.key.toLowerCase() === 'h' && document.activeElement?.tagName !== 'INPUT') {
         setDockCollapsed((c) => !c);
       }
@@ -1473,12 +1578,17 @@ export default function PalletizerWorkspace({
     }
 
     const requestRender = () => {
+      if (!isActiveRef.current) return;
       if (renderBusy) {
         renderDirty = true;
         return;
       }
       renderBusy = true;
       frameId = requestAnimationFrame(() => {
+        if (!isActiveRef.current) {
+          renderBusy = false;
+          return;
+        }
         renderDirty = false;
         const now = performance.now();
         const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -1515,7 +1625,7 @@ export default function PalletizerWorkspace({
 
         const done = () => {
           renderBusy = false;
-          if (renderDirty || stillMoving) {
+          if ((renderDirty || stillMoving) && isActiveRef.current) {
             requestRender();
           }
         };
@@ -1526,6 +1636,18 @@ export default function PalletizerWorkspace({
 
     requestRenderRef.current = requestRender;
 
+    const resizeRenderer = () => {
+      if (!isActiveRef.current) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w < 50 || h < 50) return;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      requestRender();
+    };
+    resizeRendererRef.current = resizeRenderer;
+
     const handleControlStart = () => {
       cameraAnimRef.current.active = false;
     };
@@ -1534,7 +1656,8 @@ export default function PalletizerWorkspace({
 
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (!entry) return;
+      if (!entry || !isActiveRef.current) return;
+      if (entry.contentRect.width < 50 || entry.contentRect.height < 50) return;
       const w = Math.max(100, entry.contentRect.width);
       const h = Math.max(100, entry.contentRect.height);
       camera.aspect = w / h;
@@ -1579,6 +1702,34 @@ export default function PalletizerWorkspace({
     const group = palletGroupRef.current;
     if (!group) return;
 
+    const prev = lastSceneDepsRef.current;
+    const changed =
+      !prev ||
+      prev.pallet !== pallet ||
+      prev.activeEvaluation !== activeEvaluation ||
+      prev.safetyFactor !== config.engineering.safetyFactor ||
+      prev.syncedCaseGrossKg !== syncedCaseGrossKg ||
+      prev.viewOverlayMode !== viewOverlayMode ||
+      prev.materialColor !== config.materialColor ||
+      prev.outerDimensions !== paths.info.outerDimensions;
+
+    if (!isActive) {
+      if (changed) sceneDirtyRef.current = true;
+      return;
+    }
+    if (!changed && !sceneDirtyRef.current) return;
+
+    sceneDirtyRef.current = false;
+    lastSceneDepsRef.current = {
+      pallet,
+      activeEvaluation,
+      safetyFactor: config.engineering.safetyFactor,
+      syncedCaseGrossKg,
+      viewOverlayMode,
+      materialColor: config.materialColor,
+      outerDimensions: paths.info.outerDimensions,
+    };
+
     const maxAniso = Math.min(
       getEngineProfile().maxAnisotropyCap,
       rendererRef.current?.capabilities.getMaxAnisotropy() || 4
@@ -1590,7 +1741,6 @@ export default function PalletizerWorkspace({
       activeEvaluation,
       outerDimensions: paths.info.outerDimensions,
       materialColor: config.materialColor,
-      inspectLayer,
       safetyFactor: config.engineering.safetyFactor,
       caseGrossKg: syncedCaseGrossKg,
       viewOverlayMode,
@@ -1599,9 +1749,9 @@ export default function PalletizerWorkspace({
 
     requestRenderRef.current();
   }, [
+    isActive,
     pallet,
     activeEvaluation,
-    inspectLayer,
     config.engineering.safetyFactor,
     syncedCaseGrossKg,
     viewOverlayMode,
@@ -1631,7 +1781,7 @@ export default function PalletizerWorkspace({
 
   const vectorPreviewScene = useMemo(() => {
     if (!pdfModalOpen || exportModalTab !== 'vector') return null;
-    return buildPalletVectorScene(pallet, activeEvaluation, {
+    return buildPalletVectorSceneCached(pallet, activeEvaluation, {
       includeFramesAndText: vecIncludeFrames,
       includeMaxStackPanel: vecIncludeMaxStack,
       strokePreset: vecStrokePreset,
@@ -1848,7 +1998,6 @@ export default function PalletizerWorkspace({
         activeEvaluation,
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
-        inspectLayer: null,
         safetyFactor: config.engineering.safetyFactor,
         caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode: 'normal',
@@ -1881,7 +2030,6 @@ export default function PalletizerWorkspace({
         activeEvaluation,
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
-        inspectLayer: null,
         safetyFactor: config.engineering.safetyFactor,
         caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode: 'lock-heatmap',
@@ -1945,7 +2093,6 @@ export default function PalletizerWorkspace({
         activeEvaluation,
         outerDimensions: paths.info.outerDimensions,
         materialColor: config.materialColor,
-        inspectLayer,
         safetyFactor: config.engineering.safetyFactor,
         caseGrossKg: syncedCaseGrossKg,
         viewOverlayMode,
@@ -2862,36 +3009,36 @@ export default function PalletizerWorkspace({
                     </div>
                   </div>
 
-                  <div>
-                    <div className="flex items-center justify-between text-[11px] text-[var(--ink-10)] mb-1">
-                      <span>Jumlah Layer Tumpukan</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updatePallet({
-                            manualLayerCount:
-                              pallet.manualLayerCount === null ? activeEvaluation.layerCount : null,
-                          })
-                        }
-                        className="text-[var(--accent-10)] hover:underline"
-                      >
-                        {pallet.manualLayerCount === null ? 'Auto Max (Set Manual)' : 'Kembali ke Auto'}
-                      </button>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-[var(--ink-10)]">Jumlah Layer</span>
+                      <span className="font-mono tabular-nums font-semibold text-[var(--ink-12)]">
+                        {currentLayerCount} Layer · {activeEvaluation.totalStackHeightMm} mm
+                      </span>
                     </div>
-                    {pallet.manualLayerCount !== null ? (
-                      <TactileSlider
-                        min={1}
-                        max={16}
-                        value={pallet.manualLayerCount}
-                        onChange={(e) =>
-                          updatePallet({ manualLayerCount: Number(e.target.value) || 1 })
-                        }
-                      />
-                    ) : (
-                      <div className="text-[12px] font-mono tabular-nums text-[var(--ink-11)] bg-[var(--ink-2)] rounded-[var(--radius-control)] px-2.5 py-1.5">
-                        Auto: {activeEvaluation.layerCount} Layer ({activeEvaluation.totalStackHeightMm} mm)
-                      </div>
-                    )}
+                    <TactileSlider
+                      min={1}
+                      max={maxLayerSlider}
+                      value={currentLayerCount}
+                      onChange={(e) => handleLayerCountChange(Number(e.target.value))}
+                    />
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] text-[var(--ink-10)]">
+                      <span className="font-mono tabular-nums">
+                        Batas Auto: {autoMaxLayers} Layer (Maks {pallet.maxStackHeightMm} mm)
+                      </span>
+                      {isManualLayers ? (
+                        <button
+                          type="button"
+                          onClick={() => updatePallet({ manualLayerCount: null })}
+                          className="inline-flex items-center gap-1 text-[var(--accent-10)] hover:underline font-medium cursor-pointer shrink-0"
+                        >
+                          <RotateCcw size={10} />
+                          <span>Auto</span>
+                        </button>
+                      ) : (
+                        <span className="text-[var(--green-11)] font-medium shrink-0">Auto aktif</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </TactileSection>
@@ -3630,12 +3777,9 @@ export default function PalletizerWorkspace({
               variant="ghost"
               size="inline"
               className="h-[26px] w-[26px] px-0 justify-center shrink-0"
-              onClick={() => {
-                setInspectLayer(null);
-                setCameraPreset('iso');
-              }}
-              title="Reset view"
-              aria-label="Reset view"
+              onClick={() => setCameraPreset('iso')}
+              title="Reset sudut kamera"
+              aria-label="Reset sudut kamera"
             >
               <RotateCcw size={12} />
             </TactileButton>
@@ -3660,22 +3804,30 @@ export default function PalletizerWorkspace({
                 <div className="pointer-events-auto w-full rounded-[var(--radius-container)] bg-[var(--surface-top)]/95 backdrop-blur-md border-[0.5px] border-[var(--line)] shadow-[var(--shadow-modal)] px-2.5 py-1.5 flex items-center justify-between gap-2 overflow-hidden">
                   <div className="flex items-center gap-2 min-w-0">
                     <Layers size={13} className="text-[var(--ink-10)] shrink-0" />
-                    <div className="w-[64px] shrink-0">
+                    <div className="w-[72px] shrink-0">
                       <TactileSlider
                         min={1}
-                        max={Math.max(1, activeEvaluation.layerCount)}
-                        value={inspectLayer ?? activeEvaluation.layerCount}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          setInspectLayer(val >= activeEvaluation.layerCount ? null : val);
-                        }}
+                        max={maxLayerSlider}
+                        value={currentLayerCount}
+                        onChange={(e) => handleLayerCountChange(Number(e.target.value))}
                       />
                     </div>
-                    <span className="font-mono tabular-nums text-[11px] text-[var(--ink-11)] whitespace-nowrap shrink-0">
-                      {inspectLayer === null
-                        ? `All (${activeEvaluation.layerCount})`
-                        : `Lyr ${inspectLayer}/${activeEvaluation.layerCount}`}
+                    <span className="font-mono tabular-nums text-[11px] text-[var(--ink-12)] font-medium whitespace-nowrap shrink-0">
+                      {isManualLayers
+                        ? `${currentLayerCount}/${autoMaxLayers} Lyr`
+                        : `Auto (${currentLayerCount})`}
                     </span>
+                    {isManualLayers && (
+                      <button
+                        type="button"
+                        onClick={() => updatePallet({ manualLayerCount: null })}
+                        title="Kembali ke Auto Max Layer"
+                        aria-label="Kembali ke Auto Max Layer"
+                        className="text-[10.5px] text-[var(--accent-10)] hover:underline cursor-pointer shrink-0"
+                      >
+                        Auto
+                      </button>
+                    )}
                     <span aria-hidden="true" className="text-[var(--ink-7)] hidden sm:inline">·</span>
                     <span className="font-mono tabular-nums text-[11px] font-semibold text-[var(--ink-12)] whitespace-nowrap hidden sm:inline">
                       {activeEvaluation.totalCases} dus
@@ -3793,27 +3945,59 @@ export default function PalletizerWorkspace({
                     </span>
                   </div>
 
-                  {viewOverlayMode === 'lock-heatmap' && (
-                    <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-[var(--ink-11)]">
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                        <span className="size-2 rounded-[2px] bg-[#22C55E]" />
-                        Aman
-                      </span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                        <span className="size-2 rounded-[2px] bg-[#F59E0B]" />
-                        Waspada
-                      </span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                        <span className="size-2 rounded-[2px] bg-[#EF4444]" />
-                        Beban Kritis
-                      </span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                        <span className="size-2 rounded-full bg-[#EA580C]" />
-                        Gantung ({activeEvaluation.stability.unsupportedCornerCount})
-                      </span>
-                    </div>
+                  {viewOverlayMode === 'lock-heatmap' && layerStressProfile[0] && (
+                    <span className="font-mono tabular-nums text-[11px] text-[var(--ink-11)] whitespace-nowrap">
+                      L1 Bawah:{' '}
+                      <strong
+                        className={
+                          layerStressProfile[0].stressPct > 100
+                            ? 'text-[var(--red-11)]'
+                            : layerStressProfile[0].stressPct >= 78
+                            ? 'text-[var(--amber-11)]'
+                            : 'text-[var(--green-11)]'
+                        }
+                      >
+                        {layerStressProfile[0].stressPct}%
+                      </strong>{' '}
+                      ({layerStressProfile[0].loadAboveKg} / {allowablePerBoxKgf.toFixed(1)} kg)
+                    </span>
                   )}
                 </div>
+
+                {/* Compressive Stress Heat-Map Gradient & Per-Layer % Strip */}
+                {viewOverlayMode === 'lock-heatmap' && (
+                  <div className="mt-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)] space-y-1.5">
+                    <div className="flex items-center gap-2 text-[10px] text-[var(--ink-10)]">
+                      <span className="font-mono tabular-nums shrink-0">0% Aman</span>
+                      <div
+                        className="flex-1 h-1.5 rounded-full"
+                        style={{
+                          background:
+                            'linear-gradient(90deg, #16A34A 0%, #84CC16 42%, #EAB308 74%, #F97316 92%, #EF4444 100%)',
+                        }}
+                      />
+                      <span className="font-mono tabular-nums shrink-0">100%+ Overload</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] font-mono tabular-nums text-[var(--ink-11)]">
+                      {displayedStressTicks.map((item) => (
+                        <span key={item.layer} className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <span
+                            className="size-2 rounded-[2px] shrink-0"
+                            style={{ backgroundColor: item.hexColor }}
+                          />
+                          <span>
+                            L{item.layer}
+                            {item.layer === 1 && layerStressProfile.length > 1 ? ' (Bawah)' : ''}
+                            {item.layer === layerStressProfile.length && layerStressProfile.length > 1
+                              ? ' (Atas)'
+                              : ''}
+                            : {item.stressPct}%
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 @[620px]:grid-cols-4 gap-x-4 gap-y-1 mt-1.5 pt-1.5 border-t-[0.5px] border-[var(--line)] text-[11px]">
                   <div className="min-w-0">
@@ -3845,28 +4029,36 @@ export default function PalletizerWorkspace({
                 {/* Row 2: Responsive Collapsible Controls Band */}
                 {!dockCollapsed && (
                   <div className="mt-2 pt-2 border-t-[0.5px] border-[var(--line)] flex flex-wrap items-center justify-between gap-2">
-                    {/* Layer Step Inspector */}
+                    {/* Unified Real-Time Stack Layer Slider (synced 1:1 with Left Rail) */}
                     <div className="flex items-center gap-2 min-w-0">
                       <Layers size={14} className="text-[var(--ink-10)] shrink-0" />
-                      <div className="w-[64px] shrink-0">
+                      <div className="w-[88px] sm:w-[104px] shrink-0">
                         <TactileSlider
                           min={1}
-                          max={Math.max(1, activeEvaluation.layerCount)}
-                          value={inspectLayer ?? activeEvaluation.layerCount}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            setInspectLayer(val >= activeEvaluation.layerCount ? null : val);
-                          }}
+                          max={maxLayerSlider}
+                          value={currentLayerCount}
+                          onChange={(e) => handleLayerCountChange(Number(e.target.value))}
                         />
                       </div>
-                      <span className="font-mono tabular-nums text-[11px] text-[var(--ink-11)] whitespace-nowrap">
-                        {inspectLayer === null
-                          ? `All (${activeEvaluation.layerCount})`
-                          : `Lyr ${inspectLayer}/${activeEvaluation.layerCount}`}
+                      <span className="font-mono tabular-nums text-[11px] font-medium text-[var(--ink-12)] whitespace-nowrap">
+                        {isManualLayers
+                          ? `${currentLayerCount}/${autoMaxLayers} Layer`
+                          : `Auto (${currentLayerCount} Lyr)`}
                       </span>
+                      {isManualLayers && (
+                        <button
+                          type="button"
+                          onClick={() => updatePallet({ manualLayerCount: null })}
+                          title="Kembali ke jumlah layer Auto Max"
+                          className="inline-flex items-center gap-0.5 text-[11px] text-[var(--accent-10)] hover:underline cursor-pointer shrink-0"
+                        >
+                          <RotateCcw size={11} />
+                          <span>Auto</span>
+                        </button>
+                      )}
                     </div>
 
-                    {/* Right Action: Weight & Interlock Heat-Map */}
+                    {/* Right Action: Compressive Load Heat-Map */}
                     <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                       <TactileButton
                         type="button"
@@ -3875,7 +4067,7 @@ export default function PalletizerWorkspace({
                         onClick={() =>
                           setViewOverlayMode((m) => (m === 'normal' ? 'lock-heatmap' : 'normal'))
                         }
-                        title="Mode Heat-Map Beban Berat & Penguncian Antar Layer"
+                        title="Mode Heat-Map Beban Tekan (% Batas Aman BCT per Layer)"
                       >
                         <Flame size={13} />
                         <span>Heat-Map</span>

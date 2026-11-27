@@ -19,6 +19,7 @@ interface Box3DViewerProps {
   hasMobileFloatingDock?: boolean;
   isShortLandscape?: boolean;
   focusMode?: boolean;
+  isActive?: boolean;
 }
 
 type CameraViewPreset = 'iso' | 'front' | 'top' | 'side';
@@ -273,6 +274,7 @@ export default function Box3DViewer({
   hasMobileFloatingDock = false,
   isShortLandscape = false,
   focusMode = false,
+  isActive = true,
 }: Box3DViewerProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [foldPercent, setFoldPercent] = useState<number>(82);
@@ -296,6 +298,18 @@ export default function Box3DViewer({
   const outerTexRef = useRef<THREE.CanvasTexture | null>(null);
   const innerTexRef = useRef<THREE.CanvasTexture | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const isActiveRef = useRef<boolean>(isActive);
+  const resizeRendererRef = useRef<() => void>(() => {});
+  const meshDirtyRef = useRef<boolean>(false);
+  const lastMeshDepsRef = useRef<unknown[] | null>(null);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    if (isActive) {
+      resizeRendererRef.current();
+      requestRenderRef.current();
+    }
+  }, [isActive]);
 
   // Auto-reset tear simulation if perforation gets disabled
   useEffect(() => {
@@ -336,6 +350,7 @@ export default function Box3DViewer({
   // Keyboard shortcut 'H' to collapse/expand bottom dock
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!isActiveRef.current) return;
       if (
         e.key.toLowerCase() === 'h' &&
         !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)
@@ -492,12 +507,17 @@ export default function Box3DViewer({
     }
 
     function requestRender() {
+      if (!isActiveRef.current) return;
       if (renderBusy) {
         renderDirty = true;
         return;
       }
       renderBusy = true;
       frameId = requestAnimationFrame((now) => {
+        if (!isActiveRef.current) {
+          renderBusy = false;
+          return;
+        }
         renderDirty = false;
         const dt = Math.min(0.1, Math.max(0.001, (now - lastTime) / 1000));
         lastTime = now;
@@ -570,7 +590,7 @@ export default function Box3DViewer({
 
         const done = () => {
           renderBusy = false;
-          if (renderDirty || needsAnother) requestRender();
+          if ((renderDirty || needsAnother) && isActiveRef.current) requestRender();
         };
         if (isSoftwareGl) afterDraw(done);
         else done();
@@ -589,14 +609,16 @@ export default function Box3DViewer({
     };
 
     const onResize = () => {
-      if (!container) return;
-      const w = container.clientWidth || 800;
-      const h = container.clientHeight || 600;
+      if (!container || !isActiveRef.current) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w < 50 || h < 50) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
       requestRender();
     };
+    resizeRendererRef.current = onResize;
     window.addEventListener('resize', onResize);
 
     if (!isSoftwareGl) {
@@ -631,6 +653,33 @@ export default function Box3DViewer({
   useEffect(() => {
     const root = sceneRootRef.current;
     if (!root) return;
+
+    const nextDeps = [
+      config.dimensions,
+      config.product,
+      config.inputMode,
+      config.boxStyle,
+      config.materialColor,
+      config.fluteThickness,
+      config.glueFlapWidth,
+      config.flapOverlapMm,
+      config.advanced,
+      config.prepress.fluteDirection,
+      config.perforation,
+      paths,
+    ];
+    const prevDeps = lastMeshDepsRef.current;
+    const changed =
+      !prevDeps || nextDeps.some((val, idx) => !Object.is(val, prevDeps[idx]));
+
+    if (!isActive) {
+      if (changed) meshDirtyRef.current = true;
+      return;
+    }
+    if (!changed && !meshDirtyRef.current) return;
+
+    meshDirtyRef.current = false;
+    lastMeshDepsRef.current = nextDeps;
 
     disposeObject3D(root);
     root.clear();
@@ -1732,6 +1781,7 @@ export default function Box3DViewer({
 
     requestRenderRef.current();
   }, [
+    isActive,
     config.dimensions,
     config.product,
     config.inputMode,

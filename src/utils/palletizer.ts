@@ -2013,14 +2013,8 @@ export function pickOptimalPatternType(
   return sorted[0].patternType;
 }
 
-export function computeSmartPalletAdvisor(
-  palletCfg: PalletConfig,
-  caseOuterDims: { length: number; width: number; depth: number },
-  caseGrossKg: number,
-  correctedBctKgf: number,
-  safetyFactor: number,
-  unitsPerCase: number,
-  physicsCtx?: PalletPhysicsContext
+export function buildSmartPalletAdvisorFromEvals(
+  evals: PalletPatternEvaluation[]
 ): {
   bestEvaluation: PalletPatternEvaluation;
   bestPatternType: PalletPatternType;
@@ -2028,16 +2022,6 @@ export function computeSmartPalletAdvisor(
   suggestTierSheets: boolean;
   variants: PalletCandidateVariant[];
 } {
-  const evals = evaluateAllPalletPatterns(
-    palletCfg,
-    caseOuterDims,
-    caseGrossKg,
-    correctedBctKgf,
-    safetyFactor,
-    unitsPerCase,
-    physicsCtx
-  );
-
   const sorted = [...evals].sort((a, b) => {
     if (b.stability.smartScore !== a.stability.smartScore) {
       return b.stability.smartScore - a.stability.smartScore;
@@ -2071,6 +2055,123 @@ export function computeSmartPalletAdvisor(
       best.patternType !== 'column',
     variants,
   };
+}
+
+export function computeSmartPalletAdvisor(
+  palletCfg: PalletConfig,
+  caseOuterDims: { length: number; width: number; depth: number },
+  caseGrossKg: number,
+  correctedBctKgf: number,
+  safetyFactor: number,
+  unitsPerCase: number,
+  physicsCtx?: PalletPhysicsContext
+): {
+  bestEvaluation: PalletPatternEvaluation;
+  bestPatternType: PalletPatternType;
+  suggestTopPlakban: boolean;
+  suggestTierSheets: boolean;
+  variants: PalletCandidateVariant[];
+} {
+  const evals = evaluateAllPalletPatternsCached(
+    palletCfg,
+    caseOuterDims,
+    caseGrossKg,
+    correctedBctKgf,
+    safetyFactor,
+    unitsPerCase,
+    physicsCtx
+  );
+  return buildSmartPalletAdvisorFromEvals(evals);
+}
+
+const PALLET_EVAL_CACHE = new Map<string, PalletPatternEvaluation[]>();
+const PALLET_EVAL_CACHE_MAX = 16;
+
+function buildPalletEvalCacheKey(
+  palletCfg: PalletConfig,
+  caseOuterDims: { length: number; width: number; depth: number },
+  caseGrossKg: number,
+  correctedBctKgf: number,
+  safetyFactor: number,
+  unitsPerCase: number,
+  physicsCtx?: PalletPhysicsContext
+): string {
+  const eng = physicsCtx?.engineering;
+  return [
+    palletCfg.standardId,
+    palletCfg.palletLengthMm,
+    palletCfg.palletWidthMm,
+    palletCfg.palletHeightMm,
+    palletCfg.maxStackHeightMm,
+    palletCfg.maxPalletWeightKg,
+    palletCfg.allowedOverhangMm,
+    palletCfg.perimeterAlignMode || 'auto',
+    palletCfg.selectedCandidateKey || '',
+    palletCfg.manualLayerCount ?? 'auto',
+    palletCfg.useSlipSheet ? 1 : 0,
+    palletCfg.useTierSheets ? palletCfg.tierSheetThicknessMm : 0,
+    palletCfg.useTopLayerPlakban ? 1 : 0,
+    palletCfg.useCornerPosts ? 1 : 0,
+    Math.round(caseOuterDims.length * 10),
+    Math.round(caseOuterDims.width * 10),
+    Math.round(caseOuterDims.depth * 10),
+    Math.round(caseGrossKg * 1000),
+    Math.round(correctedBctKgf * 100),
+    Math.round(safetyFactor * 100),
+    unitsPerCase,
+    Math.round((physicsCtx?.surfaceFrictionCoeff ?? 0.4) * 1000),
+    Math.round(physicsCtx?.burstStrengthKpa ?? 0),
+    Math.round((physicsCtx?.fluteThicknessMm ?? 0) * 100),
+    physicsCtx?.boardGrade ?? '',
+    physicsCtx?.boxStyle ?? '',
+    eng ? `${eng.fluteId}|${eng.topLayer}|${eng.mediumLayer}|${eng.centerLayer}|${eng.mediumLayer2}|${eng.bottomLayer}|${eng.relativeHumidity}|${eng.printCoverage}|${eng.handlingRisk ? 1 : 0}` : '',
+  ].join('|');
+}
+
+/**
+ * Shared LRU-cached wrapper around evaluateAllPalletPatterns (16-entry cache).
+ * Prevents redundant ~145ms recalculations across 2D Flap Panel 3 and Palletizer tabs.
+ */
+export function evaluateAllPalletPatternsCached(
+  palletCfg: PalletConfig,
+  caseOuterDims: { length: number; width: number; depth: number },
+  caseGrossKg: number,
+  correctedBctKgf: number,
+  safetyFactor: number,
+  unitsPerCase: number,
+  physicsCtx?: PalletPhysicsContext
+): PalletPatternEvaluation[] {
+  const key = buildPalletEvalCacheKey(
+    palletCfg,
+    caseOuterDims,
+    caseGrossKg,
+    correctedBctKgf,
+    safetyFactor,
+    unitsPerCase,
+    physicsCtx
+  );
+  const cached = PALLET_EVAL_CACHE.get(key);
+  if (cached) {
+    // Refresh LRU order
+    PALLET_EVAL_CACHE.delete(key);
+    PALLET_EVAL_CACHE.set(key, cached);
+    return cached;
+  }
+  const result = evaluateAllPalletPatterns(
+    palletCfg,
+    caseOuterDims,
+    caseGrossKg,
+    correctedBctKgf,
+    safetyFactor,
+    unitsPerCase,
+    physicsCtx
+  );
+  PALLET_EVAL_CACHE.set(key, result);
+  if (PALLET_EVAL_CACHE.size > PALLET_EVAL_CACHE_MAX) {
+    const oldest = PALLET_EVAL_CACHE.keys().next().value;
+    if (oldest !== undefined) PALLET_EVAL_CACHE.delete(oldest);
+  }
+  return result;
 }
 
 /**

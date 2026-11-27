@@ -90,6 +90,7 @@ export interface LayerVisibility {
   dimensions: boolean;
   productOverlay: boolean;
   barcode: boolean;
+  artwork: boolean;
   titleBlock: boolean;
   grid: boolean;
   printBleed: boolean;
@@ -192,6 +193,7 @@ export interface BoxConfig {
   };
   casePack?: CasePackConfig;
   pallet?: PalletConfig;
+  artwork?: Artwork2DConfig;
 }
 
 export const BOX_STYLES: Array<{
@@ -1850,6 +1852,89 @@ export interface VehiclePalletVsFloorComparison {
   recommendationNote: string;
 }
 
+// 2D Artwork Studio: Anti-Counterfeit Plakban Strip, Panel 3 Flap Pallet Shipping Marks & Custom Interactive Canvas
+export type ArtworkElementKind = 'stripe' | 'block' | 'frame' | 'text';
 
+export interface ArtworkAntiCounterfeitConfig {
+  enabled: boolean;
+  text: string;
+  tapeWidthMm: number; // Full clear plakban tape width (36 / 48 / 60 / 72 mm); half sits on each meeting length flap
+  repeatCount: number; // Number of repeating brand/security marks across each length flap
+  fontSizeMm: number;
+  stripeHeightMm: number;
+  textColor: string;
+  stripeColor: string;
+  flaps: {
+    topL1: boolean;
+    topL2: boolean;
+    bottomL1: boolean;
+    bottomL2: boolean;
+  };
+}
 
+export interface ArtworkPalletMarkConfig {
+  enabled: boolean;
+  includeFramesAndText: boolean;
+  includeMaxStackPanel: boolean;
+  strokePreset: 'thin' | 'standard' | 'bold';
+  inkColor: string;
+  scalePct: number; // 60..100% fit inside Top Flap Panel 3 (L2)
+  offsetXMm: number;
+  offsetYMm: number;
+}
 
+export interface ArtworkCustomElement {
+  id: string;
+  kind: ArtworkElementKind;
+  label: string;
+  x: number; // Top-left X in dieline mm coordinates
+  y: number; // Top-left Y in dieline mm coordinates
+  width: number; // Width in mm
+  height: number; // Height in mm
+  rotation: 0 | 90 | 180 | 270;
+  fillColor: string; // Hex color or 'none'
+  strokeColor: string; // Hex color or 'none'
+  strokeWidthMm: number;
+  opacity: number; // 0.1..1
+  text?: string;
+  fontSizeMm?: number;
+  fontWeight?: 'normal' | 'bold';
+  textAlign?: 'left' | 'center' | 'right';
+  locked?: boolean;
+}
+
+export interface Artwork2DConfig {
+  antiCounterfeit: ArtworkAntiCounterfeitConfig;
+  palletMarks: ArtworkPalletMarkConfig;
+  elements: ArtworkCustomElement[];
+}
+
+export const DEFAULT_ARTWORK_2D_CONFIG: Artwork2DConfig = {
+  antiCounterfeit: {
+    enabled: true,
+    text: 'TOTALE.ROOM',
+    tapeWidthMm: 48,
+    repeatCount: 5,
+    fontSizeMm: 5.5,
+    stripeHeightMm: 3.5,
+    textColor: '#111827',
+    stripeColor: '#DC2626',
+    flaps: {
+      topL1: true,
+      topL2: true,
+      bottomL1: true,
+      bottomL2: true,
+    },
+  },
+  palletMarks: {
+    enabled: true,
+    includeFramesAndText: true,
+    includeMaxStackPanel: true,
+    strokePreset: 'standard',
+    inkColor: '#111827',
+    scalePct: 94,
+    offsetXMm: 0,
+    offsetYMm: 0,
+  },
+  elements: [],
+};

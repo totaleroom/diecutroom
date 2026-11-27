@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowUpRight,
   Check,
   History as HistoryIcon,
   Layers,
   PanelRightClose,
   Search,
+  ShieldAlert,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react';
 import {
@@ -28,10 +31,12 @@ import {
 import { fromMm, toMm } from '../utils/units';
 import { authFetch } from '../utils/apiSession';
 import {
+  computeCaseGrossWeightKg,
   computeWeightedPrintCoverage,
   detectPrintPresetId,
   formatMaterialsSummary,
   formatSubstanceString,
+  getEffectiveProductNetWeightKg,
   getEffectiveRct,
   getIndonesianHumidityContext,
   getPrintCoverageDescription,
@@ -64,7 +69,7 @@ type RailTab = 'calculator' | 'history' | 'compare';
 
 const PANEL_CYCLE_STEPS = [0, 15, 35, 65, 90];
 
-export default function BCTInspectorRail({
+function BCTInspectorRail({
   config,
   analysis,
   userId,
@@ -667,114 +672,194 @@ export default function BCTInspectorRail({
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {activeTab === 'calculator' && (
           <>
-            {/* Primary Result Summary Card */}
-            <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3.5 space-y-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-[12px] leading-[16px] text-[var(--ink-10)]">
-                    Corrected BCT
-                  </div>
-                  <div className="text-[22px] leading-[28px] text-[var(--ink-12)] font-mono tabular-nums">
-                    {formatForce(analysis.correctedBctKgf)} {forceUnit}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[12px] leading-[16px] text-[var(--ink-10)]">
-                    Max stack ({eng.safetyFactor}:1)
-                  </div>
-                  <div className="text-[22px] leading-[28px] text-[var(--green-11)] font-mono tabular-nums">
-                    {formatForce(analysis.maxStackingLoadKgf)} {forceUnit}
-                  </div>
-                </div>
-              </div>
+            {/* Primary Result Summary Card (Plain-Language BCT & Minus-Deduction Breakdown) */}
+            {(() => {
+              const effectiveNetKg = getEffectiveProductNetWeightKg(config);
+              const caseGrossKg = computeCaseGrossWeightKg(
+                effectiveNetKg,
+                analysis.netBoxAreaSqm,
+                analysis.boardGsm
+              );
+              const maxSafeLayers =
+                caseGrossKg > 0.01 ? 1 + Math.floor(analysis.maxStackingLoadKgf / caseGrossKg) : 1;
+              const retainedPct = Math.max(
+                0,
+                Math.min(100, Math.round(analysis.factors.combined * 100))
+              );
+              const rhLossPct = Math.max(0, Math.round((1 - analysis.factors.humidity) * 100));
+              const handleLossPct = Math.max(0, Math.round((1 - analysis.factors.handling) * 100));
+              const printLossPct = Math.max(0, Math.round((1 - analysis.factors.printing) * 100));
+              const stabLossPct = Math.max(0, Math.round((1 - analysis.factors.stability) * 100));
+              const grainLossPct = Math.max(0, Math.round((1 - analysis.factors.fluteGrain) * 100));
 
-              <div className="pt-2 border-t-[0.5px] border-[var(--line)] flex items-center justify-between text-[12px] leading-[16px] text-[var(--ink-10)]">
-                <span className="tabular-nums">
-                  Raw {formatForce(analysis.bctEstimateKgf)} {forceUnit}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                  {formatEct(analysis.ectKgfCm)}
-                </span>
-              </div>
+              const stackTier =
+                maxSafeLayers >= 5
+                  ? {
+                      textClass: 'text-[var(--green-11)]',
+                      label: `Aman s/d ~${maxSafeLayers} layer`,
+                      Icon: ShieldCheck,
+                    }
+                  : maxSafeLayers >= 2
+                  ? {
+                      textClass: 'text-[var(--amber-11)]',
+                      label: `Terbatas ~${maxSafeLayers} layer`,
+                      Icon: AlertTriangle,
+                    }
+                  : {
+                      textClass: 'text-[var(--red-11)]',
+                      label: 'Maks 1 layer (rawan)',
+                      Icon: ShieldAlert,
+                    };
+              const StackIcon = stackTier.Icon;
 
-              <div className="flex items-center justify-between text-[12px] leading-[16px] text-[var(--ink-10)]">
-                <span>
-                  {ectSourceLabel} · {analysis.ectConfidence === 'HIGH' ? 'High' : 'Med'}
-                </span>
-                <span className="font-mono tabular-nums">
-                  {config.fluteThickness}mm · {analysis.boardGsm} gsm
-                </span>
-              </div>
+              const retentionBarClass =
+                retainedPct >= 55
+                  ? 'bg-[#16A34A]'
+                  : retainedPct >= 35
+                  ? 'bg-[#D97706]'
+                  : 'bg-[#DC2626]';
 
-              {/* Compact Inline Correction Factors */}
-              <div className="pt-2 border-t-[0.5px] border-[var(--line)] grid grid-cols-3 gap-x-2 gap-y-1.5 text-[11px] leading-[15px]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-10)]">Print</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                    {(analysis.factors.printing * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-10)]">RH</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                    {(analysis.factors.humidity * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-10)]">Handle</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                    {(analysis.factors.handling * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-10)]">Stab.</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                    {(analysis.factors.stability * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-10)]">Grain</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)]">
-                    {(analysis.factors.fluteGrain * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--ink-11)] font-medium">Total</span>
-                  <span className="font-mono tabular-nums text-[var(--ink-12)] font-medium">
-                    {(analysis.factors.combined * 100).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
+              const deductions: Array<{ label: string; lossPct: number }> = [
+                { label: `Kelembaban (${eng.relativeHumidity}% RH)`, lossPct: rhLossPct },
+                { label: 'Handling & Pengiriman', lossPct: handleLossPct },
+                { label: `Tinta Cetak (${eng.printCoverage}%)`, lossPct: printLossPct },
+              ];
+              if (stabLossPct > 0) {
+                deductions.push({ label: 'Rasio Tinggi Dus', lossPct: stabLossPct });
+              }
+              if (grainLossPct > 0) {
+                deductions.push({ label: 'Arah Flute Horizontal', lossPct: grainLossPct });
+              }
 
-              <div className="pt-1 flex items-center gap-2">
-                <TactileButton
-                  type="button"
-                  variant="primary"
-                  size="compact"
-                  onClick={handleSaveSnapshot}
-                  className="flex-1"
-                >
-                  {justSaved ? (
-                    <>
-                      <Check size={14} />
-                      <span>Saved to history</span>
-                    </>
-                  ) : (
-                    <span>Save to history</span>
-                  )}
-                </TactileButton>
-                <TactileButton
-                  type="button"
-                  variant="secondary"
-                  size="compact"
-                  onClick={onOpenEngineeringSheet}
-                  title="Open pre-flight & BCT breakdown"
-                >
-                  <ArrowUpRight size={14} />
-                </TactileButton>
-              </div>
-            </div>
+              return (
+                <div className="surface-raised bg-[var(--surface-top)] rounded-[var(--radius-container)] shadow-[var(--shadow-card)] p-3.5 space-y-3">
+                  {/* Hero Row: Safe Load per Bottom Box + Plain-Language Stacking Status */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] leading-[15px] text-[var(--ink-10)]">
+                        Beban Aman / Dus (SF {eng.safetyFactor}:1)
+                      </div>
+                      <div
+                        className={`text-[22px] leading-[28px] font-semibold font-mono tabular-nums ${stackTier.textClass}`}
+                      >
+                        {formatForce(analysis.maxStackingLoadKgf)} {forceUnit}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div
+                        className={`inline-flex items-center justify-end gap-1 text-[11.5px] leading-[16px] font-semibold ${stackTier.textClass}`}
+                      >
+                        <StackIcon size={12} className="shrink-0" />
+                        <span>{stackTier.label}</span>
+                      </div>
+                      <div className="text-[10.5px] leading-[15px] font-mono tabular-nums text-[var(--ink-10)] mt-0.5">
+                        Isi {effectiveNetKg.toFixed(1)} kg · Kotor {caseGrossKg.toFixed(2)} kg
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Effective BCT & Remaining Strength Bar */}
+                  <div className="pt-2.5 border-t-[0.5px] border-[var(--line)] space-y-1.5">
+                    <div className="flex items-baseline justify-between gap-2 text-[11.5px]">
+                      <span className="text-[var(--ink-10)]">BCT Efektif</span>
+                      <span className="font-mono tabular-nums text-[var(--ink-12)] font-semibold">
+                        {formatForce(analysis.correctedBctKgf)} {forceUnit}{' '}
+                        <span className="text-[11px] font-normal text-[var(--ink-10)]">
+                          (Sisa {retainedPct}%)
+                        </span>
+                      </span>
+                    </div>
+                    <div
+                      className="h-1.5 w-full rounded-full bg-[var(--ink-3)] overflow-hidden"
+                      role="progressbar"
+                      aria-valuenow={retainedPct}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`Sisa kekuatan BCT ${retainedPct} persen`}
+                    >
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-200 ${retentionBarClass}`}
+                        style={{ width: `${retainedPct}%` }}
+                      />
+                    </div>
+                    <div className="text-[10.5px] leading-[14px] text-[var(--ink-10)] font-mono tabular-nums">
+                      Dari kekuatan awal (Raw) {formatForce(analysis.bctEstimateKgf)} {forceUnit}
+                    </div>
+                  </div>
+
+                  {/* Plain-Language Minus Deduction Breakdown */}
+                  <div className="pt-2.5 border-t-[0.5px] border-[var(--line)] space-y-1">
+                    <div className="text-[10.5px] uppercase tracking-[0.04em] text-[var(--ink-10)] mb-1">
+                      Pengurangan Kondisi Lapangan
+                    </div>
+                    {deductions.map((item) => (
+                      <div
+                        key={item.label}
+                        className="flex items-center justify-between gap-2 text-[11px] leading-[16px]"
+                      >
+                        <span className="text-[var(--ink-11)] truncate">{item.label}</span>
+                        <span
+                          className={`font-mono tabular-nums shrink-0 ${
+                            item.lossPct >= 20
+                              ? 'text-[var(--red-11)] font-medium'
+                              : item.lossPct > 0
+                              ? 'text-[var(--amber-11)] font-medium'
+                              : 'text-[var(--ink-10)]'
+                          }`}
+                        >
+                          {item.lossPct > 0 ? `-${item.lossPct}%` : '0%'}
+                        </span>
+                      </div>
+                    ))}
+                    {stabLossPct === 0 && grainLossPct === 0 && (
+                      <div className="flex items-center justify-between gap-2 text-[11px] leading-[16px]">
+                        <span className="text-[var(--ink-10)]">Bentuk &amp; Arah Flute</span>
+                        <span className="font-mono tabular-nums text-[var(--green-11)] shrink-0">
+                          0% (Optimal)
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Compact Unboxed Technical Spec Footer */}
+                  <div className="pt-2 border-t-[0.5px] border-[var(--line)] flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10.5px] leading-[15px] text-[var(--ink-10)] font-mono tabular-nums">
+                    <span>ECT {formatEct(analysis.ectKgfCm)}</span>
+                    <span>
+                      {config.fluteThickness}mm · {analysis.boardGsm} gsm ·{' '}
+                      {ectSourceLabel}
+                    </span>
+                  </div>
+
+                  <div className="pt-0.5 flex items-center gap-2">
+                    <TactileButton
+                      type="button"
+                      variant="primary"
+                      size="compact"
+                      onClick={handleSaveSnapshot}
+                      className="flex-1"
+                    >
+                      {justSaved ? (
+                        <>
+                          <Check size={14} />
+                          <span>Tersimpan di Riwayat</span>
+                        </>
+                      ) : (
+                        <span>Simpan ke Riwayat</span>
+                      )}
+                    </TactileButton>
+                    <TactileButton
+                      type="button"
+                      variant="secondary"
+                      size="compact"
+                      onClick={onOpenEngineeringSheet}
+                      title="Buka detail engineering & rincian BCT"
+                    >
+                      <ArrowUpRight size={14} />
+                    </TactileButton>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Synced Box Dimensions & Flute */}
             <section className="space-y-2.5">
@@ -1574,3 +1659,5 @@ export default function BCTInspectorRail({
     </aside>
   );
 }
+
+export default React.memo(BCTInspectorRail);
